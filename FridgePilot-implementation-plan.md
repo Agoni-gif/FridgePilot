@@ -259,8 +259,8 @@ MAX_SEARCH_RESULTS=5
 
 交付配置：
 
-- `frontend`：构建 Vue 静态资源，由 Web Server 提供。
-- `backend`：FastAPI 容器，单 worker 启动。
+- `fridgepilotweb`：构建 Vue 静态资源，由 Web Server 提供。
+- `fridgepilotserver`：FastAPI 容器，单 worker 启动。
 - `data`：SQLite 持久卷，容器重启后保留。
 - `proxy`：自动 HTTPS 或 Nginx TLS 配置。
 - Docker Compose 配置健康检查、重启策略、环境变量和日志轮转。

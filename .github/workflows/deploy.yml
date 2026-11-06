@@ -1,0 +1,28 @@
+# Push 到 main 后 SSH 到服务器执行 scripts/deploy.sh
+# 需在 GitHub → Settings → Secrets 配置：
+#   DEPLOY_HOST     例如 42.192.54.171
+#   DEPLOY_USER     例如 root
+#   DEPLOY_SSH_KEY  服务器登录用私钥全文
+#   DEPLOY_PATH     例如 /www/wwwroot/FridgePal 或 /home/FridgePal
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            bash scripts/deploy.sh

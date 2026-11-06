@@ -1,0 +1,35 @@
+services:
+  fridgepilotserver:
+    build:
+      context: ./fridgepilotserver
+    env_file:
+      - .env
+    environment:
+      # Online/production: force SQLite regardless of local .env MySQL settings
+      APP_ENV: production
+      DATABASE_URL: sqlite:///./data/fridgepilot.db
+      CORS_ORIGINS: https://frid.weiverse.xyz,http://frid.weiverse.xyz,http://localhost,http://127.0.0.1
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+      # - "443:443"   # 启用 HTTPS 时再打开，证书放 nginx/ssl/
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/www:/usr/share/nginx/html:ro
+    depends_on:
+      fridgepilotserver:
+        condition: service_healthy
+    restart: unless-stopped

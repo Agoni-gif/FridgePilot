@@ -1,0 +1,73 @@
+:root {
+  --ink: #1c2430;
+  --ink-soft: #4a5568;
+  --muted: #7a8699;
+  --paper: #eef2f6;
+  --panel: rgba(255, 255, 255, 0.82);
+  --panel-solid: #fbfcfe;
+  --line: #c8d1dc;
+  --accent: #c9a227;
+  --accent-deep: #a8841a;
+  --accent-wash: rgba(201, 162, 39, 0.14);
+  --danger: #9b3b2e;
+  --danger-wash: #f8ebe8;
+  --font-display: 'Outfit', 'Avenir Next', sans-serif;
+  --font-body: 'Figtree', 'Avenir Next', sans-serif;
+  --radius: 18px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  color: var(--ink);
+  background-color: var(--paper);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  background:
+    radial-gradient(900px 480px at 8% -8%, rgba(201, 162, 39, 0.18), transparent 55%),
+    radial-gradient(700px 420px at 100% 0%, rgba(70, 110, 150, 0.14), transparent 50%),
+    linear-gradient(165deg, #f4f7fb 0%, #e8edf4 48%, #e3e9f1 100%);
+  background-attachment: fixed;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image:
+    linear-gradient(rgba(28, 36, 48, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(28, 36, 48, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse at center, black 35%, transparent 85%);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-wash);
+  color: var(--ink);
+}

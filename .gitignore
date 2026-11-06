@@ -1,0 +1,45 @@
+# Environment & secrets
+.env
+.env.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+dist/
+build/
+
+# Data
+data/
+fridgepilotserver/data/
+fridgepilotserver/logs/
+*.db
+*.sqlite3
+
+# Nginx deploy artifacts / certs (keep directory via .gitkeep)
+nginx/www/*
+!nginx/www/.gitkeep
+nginx/ssl/*
+!nginx/ssl/.gitkeep
+
+# Node / frontend
+fridgepilotweb/node_modules/
+fridgepilotweb/dist/
+*.log
+npm-debug.log*
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

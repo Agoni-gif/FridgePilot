@@ -1,0 +1,1 @@
+"""FridgePilot server application (fridgepilotserver)."""
