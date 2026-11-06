@@ -135,12 +135,25 @@ cd /www/wwwroot/FridgePal && bash scripts/deploy.sh >> /tmp/fridgepilot-deploy.l
 2. 仓库 Settings → Secrets 增加：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_PATH`  
 3. 之后 `git push origin main` 会自动 SSH 执行部署  
 
+## 用户登录（强制）
+
+未登录无法使用聊天。当前支持 **用户名/邮箱 + 密码**；手机号与微信/GitHub 等三方登录已在接口与登录页预留，暂未开通。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v1/auth/register` | 注册（username + password，email 可选） |
+| POST | `/api/v1/auth/login` | 登录（account 为用户名或邮箱） |
+| GET | `/api/v1/auth/me` | 当前用户 |
+| POST | `/api/v1/auth/logout` | 登出（客户端清 token） |
+
+生产环境请在 `.env` 中设置强随机 `JWT_SECRET`。
+
 ## API（MVP）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/health` | 存活检查 |
-| POST | `/api/v1/chat` | 解析食材 → 搜索 → 结构化菜谱 |
+| GET | `/api/v1/health` | 存活检查（无需登录） |
+| POST | `/api/v1/chat` | 解析食材 → 搜索 → 结构化菜谱（需 Bearer Token） |
 
 请求示例：
 
@@ -159,4 +172,5 @@ cd /www/wwwroot/FridgePal && bash scripts/deploy.sh >> /tmp/fridgepilot-deploy.l
 ## 安全提示
 
 - 所有密钥仅由后端读取，前端产物中不应出现 API Key。
+- 生产环境务必设置强随机 `JWT_SECRET`，不要使用示例默认值。
 - 若密钥曾泄露到聊天记录或截图，请尽快在服务商控制台轮换。

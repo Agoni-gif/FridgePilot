@@ -16,6 +16,10 @@ from app.schemas.chat import ChatMeta, ChatPreferences, ChatResponse
 logger = logging.getLogger(__name__)
 
 
+class SessionAccessError(Exception):
+    """Raised when a client tries to resume another user's chat session."""
+
+
 class ChatService:
     def __init__(self, settings: Settings, orchestrator: AgentOrchestrator) -> None:
         self.settings = settings
@@ -28,13 +32,15 @@ class ChatService:
         message: str,
         session_id: str | None,
         preferences: ChatPreferences | None,
+        user_id: str,
         request_id: str = "-",
     ) -> ChatResponse:
-        session = self._get_or_create_session(db, session_id)
+        session = self._get_or_create_session(db, session_id, user_id=user_id)
         created = session_id != session.id
         logger.info(
-            "request_id=%s session %s id=%s",
+            "request_id=%s user_id=%s session %s id=%s",
             request_id,
+            user_id,
             "created" if created or not session_id else "resumed",
             session.id,
         )
@@ -70,13 +76,19 @@ class ChatService:
         )
         return response
 
-    def _get_or_create_session(self, db: Session, session_id: str | None) -> SessionRecord:
+    def _get_or_create_session(
+        self, db: Session, session_id: str | None, *, user_id: str
+    ) -> SessionRecord:
         if session_id:
             existing = db.get(SessionRecord, session_id)
             if existing:
+                if existing.user_id and existing.user_id != user_id:
+                    raise SessionAccessError("无权访问该会话。")
+                if existing.user_id is None:
+                    existing.user_id = user_id
                 return existing
         new_id = secrets.token_urlsafe(16)
-        record = SessionRecord(id=new_id)
+        record = SessionRecord(id=new_id, user_id=user_id)
         db.add(record)
         db.flush()
         return record

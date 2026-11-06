@@ -1,26 +1,31 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { logout as apiLogout } from '../api/auth'
 import { ApiError, postChat } from '../api/chat'
 import ChatComposer from '../components/ChatComposer.vue'
 import ChatMessage from '../components/ChatMessage.vue'
+import { clearAuth, useAuth } from '../stores/auth'
 import type { ChatMessageItem, ChatPreferences } from '../types/recipe'
 
-const messages = ref<ChatMessageItem[]>([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    text: '告诉我冰箱里有什么，以及时间、人数或忌口。我会联网检索真实菜谱，并整理成带来源的步骤。',
-  },
-])
+const router = useRouter()
+const { user } = useAuth()
 
+const messages = ref<ChatMessageItem[]>([])
 const sessionId = ref<string | null>(null)
 const draft = ref('')
 const busy = ref(false)
 const listRef = ref<HTMLElement | null>(null)
 let abortController: AbortController | null = null
 
-const isFresh = computed(() => messages.value.length <= 1)
+const isFresh = computed(() => messages.value.length === 0)
 const showRetry = computed(() => messages.value.some((m) => m.role === 'error') && !!draft.value)
+
+const suggestions = [
+  '我有鸡蛋、番茄和葱，想做 20 分钟晚饭',
+  '四菜一汤：排骨、土豆、豆角、鸡蛋、番茄',
+  '只有鸡胸肉和西兰花，少油健康一点',
+]
 
 async function scrollToBottom() {
   await nextTick()
@@ -112,168 +117,244 @@ function retryLast() {
   void handleSubmit({
     message: draft.value.trim(),
     preferences: {
-      max_time_minutes: 20,
-      servings: 2,
+      max_time_minutes: null,
+      servings: null,
       dietary_restrictions: [],
     },
   })
 }
+
+function useSuggestion(text: string) {
+  draft.value = text
+}
+
+async function handleLogout() {
+  try {
+    await apiLogout()
+  } catch {
+    // Local clear still proceeds even if the network call fails.
+  }
+  clearAuth()
+  sessionId.value = null
+  messages.value = []
+  await router.replace('/login')
+}
 </script>
 
 <template>
-  <div class="shell" :class="{ fresh: isFresh }">
-    <div class="glow" aria-hidden="true" />
-
-    <header class="masthead">
-      <div class="brand-block">
-        <p class="mark">FridgePilot</p>
-        <p class="tagline">把现有食材，变成有来源的烹饪指南</p>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">F</span>
+        <span class="name">FridgePilot</span>
       </div>
-      <p class="aside">真实检索 · 可核验来源</p>
+      <div class="account">
+        <span class="username">{{ user?.username }}</span>
+        <button type="button" class="logout" @click="handleLogout">退出</button>
+      </div>
     </header>
 
-    <main ref="listRef" class="stream" aria-live="polite">
-      <ChatMessage v-for="item in messages" :key="item.id" :item="item" />
-    </main>
+    <div class="stage">
+      <main ref="listRef" class="thread" :class="{ fresh: isFresh }" aria-live="polite">
+        <div v-if="isFresh" class="empty">
+          <h1>今天想做什么菜？</h1>
+          <p>直接说冰箱里有什么、想做什么，我会联网检索并整理带来源的做法。</p>
+          <div class="suggestions">
+            <button
+              v-for="item in suggestions"
+              :key="item"
+              type="button"
+              class="chip"
+              @click="useSuggestion(item)"
+            >
+              {{ item }}
+            </button>
+          </div>
+        </div>
 
-    <footer class="dock">
-      <div v-if="showRetry" class="retry-row">
-        <button type="button" class="retry" :disabled="busy" @click="retryLast">
-          重试上一次输入
-        </button>
-      </div>
-      <ChatComposer
-        :disabled="busy"
-        :draft="draft"
-        @update:draft="(v) => (draft = v)"
-        @submit="handleSubmit"
-      />
-    </footer>
+        <ChatMessage v-for="item in messages" :key="item.id" :item="item" />
+      </main>
+
+      <footer class="composer-wrap">
+        <div class="composer-inner">
+          <div v-if="showRetry" class="retry-row">
+            <button type="button" class="retry" :disabled="busy" @click="retryLast">
+              重试上一次输入
+            </button>
+          </div>
+          <ChatComposer
+            :disabled="busy"
+            :draft="draft"
+            @update:draft="(v) => (draft = v)"
+            @submit="handleSubmit"
+          />
+          <p class="disclaimer">内容由 AI 整理，步骤与来源请自行核对</p>
+        </div>
+      </footer>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.shell {
-  position: relative;
-  isolation: isolate;
+.app {
   min-height: 100dvh;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 1.35rem 1.15rem 1.2rem;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 1rem;
+  grid-template-rows: 56px minmax(0, 1fr);
+  background: var(--bg);
 }
 
-.shell.fresh {
-  gap: 1.2rem;
-}
-
-.glow {
-  position: absolute;
-  inset: 8% 12% auto;
-  height: 180px;
-  background: radial-gradient(ellipse at center, rgba(201, 162, 39, 0.22), transparent 70%);
-  filter: blur(18px);
-  z-index: -1;
-  animation: breathe 5.5s var(--ease) infinite;
-  pointer-events: none;
-}
-
-.masthead {
+.topbar {
   display: flex;
-  align-items: end;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 0.85rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-  animation: enter 560ms var(--ease) both;
+  padding: 0 1.1rem;
+  border-bottom: 1px solid transparent;
 }
 
-.brand-block {
-  min-width: 0;
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
 }
 
-.mark {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(2rem, 6vw, 2.75rem);
-  line-height: 1.05;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-
-.shell.fresh .mark {
-  font-size: clamp(2.15rem, 7vw, 3rem);
-}
-
-.tagline {
-  margin: 0.55rem 0 0;
-  max-width: 22rem;
+.username {
+  font-size: 0.88rem;
   color: var(--ink-soft);
-  font-size: 1rem;
-  line-height: 1.45;
 }
 
-.aside {
-  margin: 0 0 0.25rem;
-  flex-shrink: 0;
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  writing-mode: horizontal-tb;
+.logout {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
-.stream {
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  padding: 0.35rem 0.1rem 0.6rem;
-  min-height: 12rem;
-  scroll-behavior: smooth;
-  animation: enter 700ms var(--ease) both;
+.logout:hover {
+  background: var(--bg-soft);
+  border-color: var(--line-strong);
 }
 
-.dock {
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.logo {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 8px;
   display: grid;
-  gap: 0.7rem;
-  padding: 0.15rem 0 0.2rem;
-  animation: enter 820ms var(--ease) both;
+  place-items: center;
+  background: var(--brand);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
-.dock::before {
-  content: '';
-  display: block;
-  height: 1px;
-  margin: 0 0.2rem 0.15rem;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--line) 90%, var(--ink)),
-    transparent
-  );
+.name {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.stage {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.thread {
+  overflow: auto;
+  padding: 0.5rem 1rem 1.25rem;
+  scroll-behavior: smooth;
+}
+
+.thread.fresh {
+  display: grid;
+  align-content: center;
+}
+
+.empty {
+  width: min(100%, var(--content-width));
+  margin: 0 auto 2.5rem;
+  text-align: center;
+  animation: fade 420ms var(--ease) both;
+}
+
+.empty h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 4vw, 2.2rem);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.empty p {
+  margin: 0.85rem auto 0;
+  max-width: 28rem;
+  color: var(--muted);
+  line-height: 1.6;
+  font-size: 0.98rem;
+}
+
+.suggestions {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.chip:hover {
+  background: var(--bg-soft);
+  border-color: var(--line-strong);
+}
+
+.composer-wrap {
+  padding: 0 1rem 0.85rem;
+  background: linear-gradient(180deg, transparent, var(--bg) 28%);
+}
+
+.composer-inner {
+  width: min(100%, var(--content-width));
+  margin: 0 auto;
 }
 
 .retry-row {
   display: flex;
+  justify-content: center;
+  margin-bottom: 0.55rem;
 }
 
 .retry {
   border: 1px solid var(--line);
-  background: var(--panel-solid);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 0.5rem 0.85rem;
+  background: var(--bg);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.85rem;
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease;
 }
 
 .retry:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent-wash);
+  background: var(--bg-soft);
 }
 
 .retry:disabled {
@@ -281,37 +362,21 @@ function retryLast() {
   cursor: not-allowed;
 }
 
-@keyframes enter {
+.disclaimer {
+  margin: 0.55rem 0 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+@keyframes fade {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes breathe {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(0.96);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.04);
-  }
-}
-
-@media (max-width: 640px) {
-  .masthead {
-    flex-direction: column;
-    align-items: start;
-  }
-
-  .aside {
-    margin: 0;
   }
 }
 </style>

@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import AgentOrchestrator
+from app.api.deps import get_current_user
 from app.common.config import Settings, get_settings
 from app.common.logging_setup import preview_text
+from app.db.models import User
 from app.db.session import get_db
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatService, SessionAccessError
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ async def chat(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     service: ChatService = Depends(get_chat_service),
+    user: User = Depends(get_current_user),
 ) -> ChatResponse:
     request_id = getattr(request.state, "request_id", "-")
     if len(body.message) > settings.max_message_length:
@@ -56,20 +59,28 @@ async def chat(
         )
 
     logger.info(
-        "request_id=%s chat start session_id=%s message=%r prefs=%s",
+        "request_id=%s user_id=%s chat start session_id=%s message=%r prefs=%s",
         request_id,
+        user.id,
         body.session_id or "(new)",
         preview_text(body.message),
         body.preferences.model_dump() if body.preferences else None,
     )
 
-    response = await service.handle_chat(
-        db=db,
-        message=body.message,
-        session_id=body.session_id,
-        preferences=body.preferences,
-        request_id=request_id,
-    )
+    try:
+        response = await service.handle_chat(
+            db=db,
+            message=body.message,
+            session_id=body.session_id,
+            preferences=body.preferences,
+            user_id=user.id,
+            request_id=request_id,
+        )
+    except SessionAccessError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "SESSION_FORBIDDEN", "message": str(exc)},
+        ) from exc
 
     logger.info(
         "request_id=%s chat done status=%s session_id=%s elapsed_ms=%s recipe=%s",

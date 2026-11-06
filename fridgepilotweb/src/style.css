@@ -1,22 +1,21 @@
 :root {
-  --ink: #1c2430;
-  --ink-soft: #4a5568;
-  --muted: #7a8699;
-  --paper: #eef2f6;
-  --panel: rgba(255, 255, 255, 0.82);
-  --panel-solid: #fbfcfe;
-  --line: #c8d1dc;
-  --accent: #c9a227;
-  --accent-deep: #a8841a;
-  --accent-wash: rgba(201, 162, 39, 0.14);
-  --danger: #9b3b2e;
-  --danger-wash: #f8ebe8;
-  --font-display: 'Outfit', 'Avenir Next', sans-serif;
-  --font-body: 'Figtree', 'Avenir Next', sans-serif;
-  --radius: 18px;
+  --ink: #1a1a1a;
+  --ink-soft: #404040;
+  --muted: #8b8b8b;
+  --bg: #ffffff;
+  --bg-soft: #f7f7f8;
+  --user-bubble: #f3f4f6;
+  --line: #e5e5e5;
+  --line-strong: #d4d4d4;
+  --brand: #4d6bfe;
+  --brand-hover: #3b57e8;
+  --danger: #d94841;
+  --danger-wash: #fff1f0;
+  --font-body: 'Figtree', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --content-width: 760px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   color: var(--ink);
-  background-color: var(--paper);
+  background: var(--bg);
   font-family: var(--font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -37,24 +36,7 @@ body,
 
 body {
   min-height: 100dvh;
-  background:
-    radial-gradient(900px 480px at 8% -8%, rgba(201, 162, 39, 0.18), transparent 55%),
-    radial-gradient(700px 420px at 100% 0%, rgba(70, 110, 150, 0.14), transparent 50%),
-    linear-gradient(165deg, #f4f7fb 0%, #e8edf4 48%, #e3e9f1 100%);
-  background-attachment: fixed;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.35;
-  background-image:
-    linear-gradient(rgba(28, 36, 48, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(28, 36, 48, 0.035) 1px, transparent 1px);
-  background-size: 28px 28px;
-  mask-image: radial-gradient(ellipse at center, black 35%, transparent 85%);
+  background: var(--bg);
 }
 
 button,
@@ -68,6 +50,5 @@ a {
 }
 
 ::selection {
-  background: var(--accent-wash);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--brand) 22%, white);
 }

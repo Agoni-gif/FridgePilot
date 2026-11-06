@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -336,6 +337,8 @@ class AgentOrchestrator:
 
             candidate = {
                 **data,
+                "title": self._clean_display_title(str(data.get("title") or "")),
+                "summary": self._clean_display_text(str(data.get("summary") or "")),
                 "sources": trusted,
                 "insufficient": False,
             }
@@ -350,6 +353,28 @@ class AgentOrchestrator:
                 exc_info=True,
             )
             return None
+
+    @staticmethod
+    def _clean_display_title(title: str) -> str:
+        cleaned = title.strip()
+        patterns = [
+            r"^可核验来源的?套餐方案[：:\s]*",
+            r"[（(]\s*可核验来源版?\s*[）)]",
+            r"[（(]\s*基于现有来源\s*[）)]",
+            r"[（(]\s*有来源\s*[）)]",
+            r"可核验来源版?",
+            r"基于现有来源",
+        ]
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ：:-—")
+        return cleaned or title.strip()
+
+    @staticmethod
+    def _clean_display_text(text: str) -> str:
+        cleaned = re.sub(r"[（(]\s*可核验来源版?\s*[）)]", "", text)
+        cleaned = re.sub(r"可核验来源版?", "", cleaned)
+        return re.sub(r"\s{2,}", " ", cleaned).strip()
 
     async def _maybe_repair(self, data: Any) -> dict[str, Any]:
         if isinstance(data, dict):

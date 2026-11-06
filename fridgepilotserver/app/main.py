@@ -13,6 +13,7 @@ from app.api.errors import (
     unhandled_exception_handler,
     validation_exception_handler,
 )
+from app.api.auth_routes import router as auth_router
 from app.api.routes import router
 from app.common.config import get_settings
 from app.common.logging_setup import setup_logging
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
     app.include_router(router)
+    app.include_router(auth_router)
     return app
 
 

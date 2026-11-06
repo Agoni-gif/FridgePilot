@@ -73,6 +73,31 @@ def init_db() -> None:
         _ensure_mysql_database(settings.database_url)
 
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    """Add columns that create_all will not alter on existing tables."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "sessions" not in inspector.get_table_names():
+        return
+
+    existing = {col["name"] for col in inspector.get_columns("sessions")}
+    if "user_id" in existing:
+        return
+
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        if dialect == "sqlite":
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON sessions (user_id)")
+            )
+        else:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64) NULL"))
+            conn.execute(text("CREATE INDEX ix_sessions_user_id ON sessions (user_id)"))
 
 
 def _ensure_mysql_database(database_url: str) -> None:

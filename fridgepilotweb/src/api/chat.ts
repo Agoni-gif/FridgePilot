@@ -1,15 +1,7 @@
 import type { ChatPreferences, ChatResponse } from '../types/recipe'
+import { apiRequest, ApiError } from './http'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? ''
-
-export class ApiError extends Error {
-  code: string
-
-  constructor(code: string, message: string) {
-    super(message)
-    this.code = code
-  }
-}
+export { ApiError }
 
 export async function postChat(params: {
   message: string
@@ -17,11 +9,10 @@ export async function postChat(params: {
   preferences: ChatPreferences
   signal?: AbortSignal
 }): Promise<ChatResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/chat`, {
+  return apiRequest<ChatResponse>('/api/v1/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     signal: params.signal,
-    body: JSON.stringify({
+    body: {
       message: params.message,
       session_id: params.sessionId,
       preferences: {
@@ -29,16 +20,6 @@ export async function postChat(params: {
         servings: params.preferences.servings,
         dietary_restrictions: params.preferences.dietary_restrictions,
       },
-    }),
+    },
   })
-
-  const data = await res.json().catch(() => null)
-
-  if (!res.ok) {
-    const code = data?.error?.code ?? 'HTTP_ERROR'
-    const message = data?.error?.message ?? '请求失败，请稍后重试。'
-    throw new ApiError(code, message)
-  }
-
-  return data as ChatResponse
 }

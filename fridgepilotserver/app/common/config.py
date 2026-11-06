@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     max_message_length: int = 1000
-    prompt_version: str = "v2"
+    prompt_version: str = "v3"
+
+    jwt_secret: str = "dev-only-change-me-fridgepilot-jwt"
+    jwt_expire_hours: int = 168
 
     log_level: str = "INFO"
     # Relative to process cwd (usually fridgepilotserver/). Empty = stdout only.
