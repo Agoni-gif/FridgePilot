@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # FridgePilot 服务器一键部署：git pull → 构建前端 → 发布到 nginx/www → 重启容器
+# 跳过 git：SKIP_GIT_PULL=1 bash scripts/deploy.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,9 +13,18 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-echo "==> git pull"
-git fetch origin
-git pull --ff-only origin main
+if [[ "${SKIP_GIT_PULL:-0}" == "1" ]]; then
+  echo "==> 跳过 git pull（SKIP_GIT_PULL=1）"
+else
+  echo "==> git pull"
+  export GIT_TERMINAL_PROMPT=0
+  # 国内访问 GitHub 可能很慢/卡住，120s 超时
+  if ! timeout 120 git fetch --prune origin; then
+    echo "WARN: git fetch 失败或超时，继续用当前代码部署"
+  else
+    git pull --ff-only origin main || echo "WARN: git pull 失败，继续用当前代码部署"
+  fi
+fi
 
 echo "==> 构建前端并发布到 nginx/www"
 if ! command -v npm >/dev/null 2>&1; then
