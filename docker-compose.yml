@@ -24,8 +24,9 @@ services:
   nginx:
     image: nginx:1.27-alpine
     ports:
-      - "8080:80"
-      # - "443:443"   # 启用 HTTPS 时再打开，证书放 nginx/ssl/
+      - "80:80"
+      - "443:443"
+      # 调试可用: "8080:80"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
