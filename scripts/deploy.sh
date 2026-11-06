@@ -43,10 +43,11 @@ mkdir -p nginx/www nginx/ssl data
 find nginx/www -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +
 cp -r fridgepilotweb/dist/. nginx/www/
 
+echo "==> docker build（--network=host，避免构建期 DNS 失败）"
+docker build --network=host -t fridgepal-fridgepilotserver:latest ./fridgepilotserver
+
 echo "==> docker compose up"
-# build.network: host 时，新版 buildx 需要显式授权
-docker compose build --allow=network.host
-docker compose up -d
+docker compose up -d --no-build
 docker compose ps
 
 echo "==> 健康检查"

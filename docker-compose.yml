@@ -2,8 +2,7 @@ services:
   fridgepilotserver:
     build:
       context: ./fridgepilotserver
-      # 避免构建阶段容器内 DNS 失败（国内云主机常见）
-      network: host
+    image: fridgepal-fridgepilotserver:latest
     env_file:
       - .env
     environment:
