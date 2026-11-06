@@ -44,7 +44,9 @@ find nginx/www -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +
 cp -r fridgepilotweb/dist/. nginx/www/
 
 echo "==> docker compose up"
-docker compose up -d --build
+# build.network: host 时，新版 buildx 需要显式授权
+docker compose build --allow=network.host
+docker compose up -d
 docker compose ps
 
 echo "==> 健康检查"
