@@ -43,8 +43,9 @@ mkdir -p nginx/www nginx/ssl data
 find nginx/www -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +
 cp -r fridgepilotweb/dist/. nginx/www/
 
-echo "==> docker build（--network=host，避免构建期 DNS 失败）"
-docker build --network=host -t fridgepal-fridgepilotserver:latest ./fridgepilotserver
+echo "==> docker build（--network=host --pull=false）"
+# --pull=false：有本地基础镜像时不再访问 Docker Hub（国内常超时）
+docker build --network=host --pull=false -t fridgepal-fridgepilotserver:latest ./fridgepilotserver
 
 echo "==> docker compose up"
 docker compose up -d --no-build
