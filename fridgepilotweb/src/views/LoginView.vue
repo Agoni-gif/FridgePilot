@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { login } from '../api/auth'
 import { ApiError } from '../api/http'
+import SliderCaptcha from '../components/SliderCaptcha.vue'
 import { setAuth } from '../stores/auth'
 
 const router = useRouter()
@@ -10,20 +11,34 @@ const account = ref('')
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
+const captchaResetKey = ref(0)
+const captcha = ref<{ captchaId: string; captchaX: number } | null>(null)
+
+function onCaptchaChange(value: { captchaId: string; captchaX: number } | null) {
+  captcha.value = value
+}
 
 async function handleSubmit() {
   if (busy.value) return
   error.value = ''
+  if (!captcha.value) {
+    error.value = '请先完成滑块验证。'
+    return
+  }
   busy.value = true
   try {
     const res = await login({
       account: account.value.trim(),
       password: password.value,
+      captcha_id: captcha.value.captchaId,
+      captcha_x: captcha.value.captchaX,
     })
     setAuth(res.access_token, res.user)
     await router.replace('/')
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : '登录失败，请稍后重试。'
+    captcha.value = null
+    captchaResetKey.value += 1
   } finally {
     busy.value = false
   }
@@ -34,7 +49,7 @@ async function handleSubmit() {
   <div class="auth-page">
     <div class="panel">
       <div class="brand">
-        <span class="logo" aria-hidden="true">F</span>
+        <img class="logo" src="/logo-mark.svg" alt="" width="28" height="28" />
         <span class="name">FridgePilot</span>
       </div>
       <h1>登录</h1>
@@ -49,8 +64,11 @@ async function handleSubmit() {
           <span>密码</span>
           <input v-model="password" type="password" autocomplete="current-password" required />
         </label>
+        <div class="captcha-wrap">
+          <SliderCaptcha :reset-key="captchaResetKey" @change="onCaptchaChange" />
+        </div>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button type="submit" class="primary" :disabled="busy">
+        <button type="submit" class="primary" :disabled="busy || !captcha">
           {{ busy ? '登录中…' : '登录' }}
         </button>
       </form>
@@ -98,13 +116,9 @@ async function handleSubmit() {
 .logo {
   width: 1.7rem;
   height: 1.7rem;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--brand);
-  color: #fff;
-  font-size: 0.85rem;
-  font-weight: 700;
+  border-radius: 50%;
+  display: block;
+  flex-shrink: 0;
 }
 
 .name {
@@ -131,7 +145,8 @@ h1 {
   gap: 0.9rem;
 }
 
-label {
+label,
+.captcha-wrap {
   display: grid;
   gap: 0.35rem;
   font-size: 0.88rem;

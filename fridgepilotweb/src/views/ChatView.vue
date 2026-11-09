@@ -145,7 +145,7 @@ async function handleLogout() {
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo" aria-hidden="true">F</span>
+        <img class="logo" src="/logo-mark.svg" alt="" width="28" height="28" />
         <span class="name">FridgePilot</span>
       </div>
       <div class="account">
@@ -248,13 +248,9 @@ async function handleLogout() {
 .logo {
   width: 1.7rem;
   height: 1.7rem;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--brand);
-  color: #fff;
-  font-size: 0.85rem;
-  font-weight: 700;
+  border-radius: 50%;
+  display: block;
+  flex-shrink: 0;
 }
 
 .name {

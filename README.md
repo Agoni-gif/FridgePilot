@@ -141,12 +141,17 @@ cd /www/wwwroot/FridgePal && bash scripts/deploy.sh >> /tmp/fridgepilot-deploy.l
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/v1/auth/captcha` | 滑块拼图验证码（登录前获取） |
 | POST | `/api/v1/auth/register` | 注册（username + password，email 可选） |
-| POST | `/api/v1/auth/login` | 登录（account 为用户名或邮箱） |
+| POST | `/api/v1/auth/login` | 登录（account 为用户名或邮箱，须带验证码） |
 | GET | `/api/v1/auth/me` | 当前用户 |
 | POST | `/api/v1/auth/logout` | 登出（客户端清 token） |
 
 生产环境请在 `.env` 中设置强随机 `JWT_SECRET`。
+
+### 验证码背景素材
+
+验证码背景图只放后端 `fridgepilotserver/app/assets/captcha/`，前端不再持有原图；新增素材只改这一处。详见该目录下 `README.md`。
 
 ## API（MVP）
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
+from app.api.client_ip import client_key
 from app.api.deps import get_auth_service, get_current_user
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.auth import (
     AuthTokenResponse,
+    CaptchaChallengeResponse,
+    CaptchaVerifyRequest,
+    CaptchaVerifyResponse,
     LoginRequest,
     PhoneLoginRequest,
     PhoneSendCodeRequest,
@@ -15,6 +19,7 @@ from app.schemas.auth import (
     UserPublic,
 )
 from app.services.auth_service import AuthError, AuthService
+from app.services.captcha_service import CaptchaError, CaptchaService, get_captcha_service
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -22,6 +27,36 @@ _NOT_IMPLEMENTED = {
     "code": "NOT_IMPLEMENTED",
     "message": "该登录方式即将开放，请使用用户名/邮箱登录。",
 }
+
+
+@router.get("/captcha", response_model=CaptchaChallengeResponse)
+def create_captcha(
+    request: Request,
+    captcha: CaptchaService = Depends(get_captcha_service),
+) -> CaptchaChallengeResponse:
+    try:
+        return CaptchaChallengeResponse(**captcha.create(client_key=client_key(request)))
+    except CaptchaError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+
+
+@router.post("/captcha/verify", response_model=CaptchaVerifyResponse)
+def verify_captcha(
+    body: CaptchaVerifyRequest,
+    request: Request,
+    captcha: CaptchaService = Depends(get_captcha_service),
+) -> CaptchaVerifyResponse:
+    try:
+        captcha.check(body.captcha_id, body.captcha_x, client_key=client_key(request))
+    except CaptchaError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return CaptchaVerifyResponse(ok=True)
 
 
 @router.post("/register", response_model=AuthTokenResponse)
@@ -42,11 +77,12 @@ def register(
 @router.post("/login", response_model=AuthTokenResponse)
 def login(
     body: LoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
     service: AuthService = Depends(get_auth_service),
 ) -> AuthTokenResponse:
     try:
-        return service.login(db, body)
+        return service.login(db, body, client_key=client_key(request))
     except AuthError as exc:
         raise HTTPException(
             status_code=exc.status_code,

@@ -9,6 +9,7 @@ from app.common.config import Settings
 from app.common.security import create_access_token, hash_password, verify_password
 from app.db.models import User
 from app.schemas.auth import AuthTokenResponse, LoginRequest, RegisterRequest, UserPublic
+from app.services.captcha_service import CaptchaError, CaptchaService
 
 
 class AuthError(Exception):
@@ -20,8 +21,9 @@ class AuthError(Exception):
 
 
 class AuthService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, captcha: CaptchaService) -> None:
         self.settings = settings
+        self.captcha = captcha
 
     def register(self, db: Session, body: RegisterRequest) -> AuthTokenResponse:
         if self._find_by_username(db, body.username):
@@ -40,7 +42,22 @@ class AuthService:
         db.refresh(user)
         return self._token_response(user)
 
-    def login(self, db: Session, body: LoginRequest) -> AuthTokenResponse:
+    def login(
+        self,
+        db: Session,
+        body: LoginRequest,
+        *,
+        client_key: str = "unknown",
+    ) -> AuthTokenResponse:
+        try:
+            self.captcha.verify_and_consume(
+                body.captcha_id,
+                body.captcha_x,
+                client_key=client_key,
+            )
+        except CaptchaError as exc:
+            raise AuthError(exc.code, exc.message, status_code=exc.status_code) from exc
+
         user = self._find_by_account(db, body.account)
         if not user or not verify_password(body.password, user.password_hash):
             raise AuthError("INVALID_CREDENTIALS", "账号或密码错误", status_code=401)

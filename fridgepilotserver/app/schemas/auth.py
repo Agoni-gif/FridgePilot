@@ -22,10 +22,12 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    """Login with username or email in the `account` field."""
+    """使用用户名或邮箱（account）登录，并附带滑块验证码结果。"""
 
     account: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=128)
+    captcha_id: str = Field(min_length=8, max_length=64)
+    captcha_x: float = Field(ge=0, le=1000)
 
     @field_validator("account")
     @classmethod
@@ -34,6 +36,26 @@ class LoginRequest(BaseModel):
         if not cleaned:
             raise ValueError("账号不能为空")
         return cleaned
+
+
+class CaptchaChallengeResponse(BaseModel):
+    captcha_id: str
+    bg_image: str
+    piece_image: str
+    piece_y: int
+    piece_pad: int = 0
+    bg_width: int
+    bg_height: int
+    piece_size: int
+
+
+class CaptchaVerifyRequest(BaseModel):
+    captcha_id: str = Field(min_length=8, max_length=64)
+    captcha_x: float = Field(ge=0, le=1000)
+
+
+class CaptchaVerifyResponse(BaseModel):
+    ok: bool = True
 
 
 class UserPublic(BaseModel):

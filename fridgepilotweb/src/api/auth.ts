@@ -7,6 +7,35 @@ export type AuthTokenResponse = {
   user: AuthUser
 }
 
+export type CaptchaChallenge = {
+  captcha_id: string
+  bg_image: string
+  piece_image: string
+  piece_y: number
+  piece_pad: number
+  bg_width: number
+  bg_height: number
+  piece_size: number
+}
+
+export function fetchCaptcha(): Promise<CaptchaChallenge> {
+  return apiRequest<CaptchaChallenge>('/api/v1/auth/captcha', {
+    method: 'GET',
+    auth: false,
+  })
+}
+
+export function verifyCaptcha(payload: {
+  captcha_id: string
+  captcha_x: number
+}): Promise<{ ok: boolean }> {
+  return apiRequest<{ ok: boolean }>('/api/v1/auth/captcha/verify', {
+    method: 'POST',
+    body: payload,
+    auth: false,
+  })
+}
+
 export function register(payload: {
   username: string
   password: string
@@ -26,6 +55,8 @@ export function register(payload: {
 export function login(payload: {
   account: string
   password: string
+  captcha_id: string
+  captcha_x: number
 }): Promise<AuthTokenResponse> {
   return apiRequest<AuthTokenResponse>('/api/v1/auth/login', {
     method: 'POST',
