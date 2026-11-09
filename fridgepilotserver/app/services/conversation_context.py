@@ -1,3 +1,5 @@
+"""会话上下文组装：状态读取、最近轮次、菜谱摘要与 token 预算裁剪。"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.common.config import Settings
 from app.db.models import MessageRecord, RecipeRecord, SessionRecord
+from app.repositories import conversation_repository
 from app.schemas.context import (
     AssembledContext,
     PublicContext,
@@ -22,14 +25,14 @@ from app.services.state_merge import parse_overrides_json, parse_state_json
 
 logger = logging.getLogger(__name__)
 
-# Conservative: ~2 chars per token for mixed Chinese/English.
+# 中英混合文本的保守估算：约 2 字符 ≈ 1 token
 _CHARS_PER_TOKEN = 2
 _STEP_INDEX_RE = re.compile(r"第\s*([0-9一二三四五六七八九十两]+)\s*步")
 _LABELED_STEP_RE = re.compile(r"^第\s*(\d+)\s*步")
 
 
 class ContextBudgetExceededError(Exception):
-    """Raised when hard context (message/state/overrides) cannot fit the budget."""
+    """硬上下文（当前消息/状态/覆盖项）已无法塞进预算。"""
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(
@@ -39,16 +42,19 @@ class ContextBudgetExceededError(Exception):
 
 
 def estimate_tokens(text: str) -> int:
+    """粗略估算文本 token 数。"""
     if not text:
         return 0
     return max(1, (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN)
 
 
 def load_session_state(session: SessionRecord) -> SessionState | None:
+    """从会话行解析任务状态 JSON。"""
     return parse_state_json(session.state_json)
 
 
 def load_session_overrides(session: SessionRecord) -> SessionOverrides:
+    """从会话行解析显式覆盖/清除标记。"""
     return parse_overrides_json(session.session_overrides_json)
 
 
@@ -60,20 +66,15 @@ def load_last_recipe(
     current_message: str = "",
     recipe_token_budget: int | None = None,
 ) -> tuple[RecipeRecord | None, Recipe | None, dict[str, Any] | None]:
-    """Load last recipe by validated state pointer; fall back to latest in session."""
+    """按状态中的 last_recipe_id 取菜谱；无效则回退到会话最新菜谱。"""
     record: RecipeRecord | None = None
     if state and state.last_recipe_id is not None:
-        candidate = db.get(RecipeRecord, state.last_recipe_id)
+        candidate = conversation_repository.get_recipe(db, state.last_recipe_id)
         if candidate and candidate.session_id == session.id:
             record = candidate
     if record is None:
-        record = (
-            db.query(RecipeRecord)
-            .filter(RecipeRecord.session_id == session.id)
-            .order_by(RecipeRecord.id.desc())
-            .first()
-        )
-        # Respect context boundary: recipe must be linked to a message after the start.
+        record = conversation_repository.get_latest_recipe(db, session.id)
+        # 尊重上下文边界：菜谱须关联到边界之后的消息
         if record and session.context_start_message_id is not None:
             if (
                 record.assistant_message_id is not None
@@ -81,8 +82,7 @@ def load_last_recipe(
             ):
                 record = None
             elif record.assistant_message_id is None:
-                # Old unpaired recipes: only use if created after clear is unknowable;
-                # when a clear boundary exists and state has no last_recipe_id, skip.
+                # 旧未配对菜谱：有清除边界且状态无 last_recipe_id 时跳过
                 if not state or state.last_recipe_id is None:
                     record = None
 
@@ -110,7 +110,7 @@ def build_recipe_summary(
     current_message: str = "",
     token_budget: int | None = None,
 ) -> dict[str, Any]:
-    """Build a last_recipe payload, selecting steps by focus and fitting budget."""
+    """构造 last_recipe 载荷：按焦点选步骤并适配预算。"""
     focus_idx = _parse_step_index(current_message)
     focused = select_steps_for_focus(recipe.steps, current_message)
     summary: dict[str, Any] = {
@@ -130,7 +130,7 @@ def build_recipe_summary(
 
 
 def select_steps_for_focus(steps: list[str], focus: str) -> list[str]:
-    """Prefer referenced step(s); otherwise keep all steps (budget trims later)."""
+    """优先保留被引用的步骤；否则先保留全部，后续由预算裁剪。"""
     if not steps:
         return []
     idx = _parse_step_index(focus)
@@ -143,7 +143,7 @@ def select_steps_for_focus(steps: list[str], focus: str) -> list[str]:
     selected = []
     for i in range(start, end):
         selected.append(f"第{i + 1}步：{steps[i]}")
-    # If focus asked for a step beyond list, still include last step note.
+    # 焦点步超出列表时，仍保留最后一步说明
     if idx > len(steps):
         selected.append(f"（菜谱共 {len(steps)} 步，没有第{idx}步）")
     return selected
@@ -155,12 +155,12 @@ def shrink_recipe_summary(
     *,
     focus_step_index: int | None = None,
 ) -> dict[str, Any]:
-    """Trim recipe payload; always prefer keeping the user-referenced step."""
+    """压缩菜谱载荷；始终优先保住用户引用的步骤。"""
     current = dict(summary)
     if estimate_tokens(json.dumps(current, ensure_ascii=False)) <= token_budget:
         return current
 
-    # Drop sources first (can be long URLs).
+    # 先丢 sources（URL 可能很长）
     current["sources"] = []
     if estimate_tokens(json.dumps(current, ensure_ascii=False)) <= token_budget:
         return current
@@ -172,7 +172,7 @@ def shrink_recipe_summary(
     while estimate_tokens(json.dumps(current, ensure_ascii=False)) > token_budget and (
         len(steps) > 1 or len(ingredients) > 1 or current.get("summary")
     ):
-        # Prefer dropping non-focus steps before ingredients / summary.
+        # 优先丢非焦点步骤，再动食材/摘要
         if len(steps) > 1:
             drop_at = _pick_non_focus_step_index(steps, focus_idx)
             if drop_at is not None:
@@ -203,6 +203,7 @@ def shrink_recipe_summary(
 
 
 def turns_token_count(turns: list[RecentTurn]) -> int:
+    """估算近期轮次内容 token 数。"""
     return _turns_tokens(turns)
 
 
@@ -215,12 +216,11 @@ def load_recent_turns(
     reserved_tokens: int = 0,
     after_message_id: int | None = None,
 ) -> list[RecentTurn]:
-    """Load completed user/assistant turns after context/summary boundary, newest-trimmed.
+    """加载上下文/摘要边界之后的完整用户/助手轮次，并按新→旧裁剪。
 
-    Messages with id <= after_message_id (typically summary_until_message_id) are
-    excluded so the recent window never overlaps the summarized range.
+    id <= after_message_id（通常为 summary_until_message_id）的消息会被排除，
+    保证近期窗口不与已摘要区间重叠。
     """
-    query = db.query(MessageRecord).filter(MessageRecord.session_id == session.id)
     lower_bound: int | None = None
     if session.context_start_message_id is not None:
         lower_bound = session.context_start_message_id
@@ -230,9 +230,9 @@ def load_recent_turns(
             if lower_bound is None
             else max(lower_bound, after_message_id)
         )
-    if lower_bound is not None:
-        query = query.filter(MessageRecord.id > lower_bound)
-    messages = query.order_by(MessageRecord.id.asc()).all()
+    messages = conversation_repository.list_messages_after(
+        db, session.id, after_message_id=lower_bound
+    )
 
     turns: list[RecentTurn] = []
     pending_user: MessageRecord | None = None
@@ -285,7 +285,7 @@ def load_recent_turns(
 
 @dataclass
 class ContextBudgetPlan:
-    """Shared budget split used by assemble_context and summary overflow selection."""
+    """assemble_context 与摘要溢出选择共用的预算切分结果。"""
 
     total_budget: int
     hard_tokens: int
@@ -307,7 +307,7 @@ def plan_context_budgets(
     current_message: str,
     settings: Settings,
 ) -> ContextBudgetPlan:
-    """Compute the same turns budget assemble_context will use for the recent window.
+    """计算 assemble_context 用于近期窗口的同一 turns 预算。
 
     Summary overflow selection must call this so covered range and recent window
     meet without a gap.
@@ -331,8 +331,7 @@ def plan_context_budgets(
         + 80
     )
     remaining = max(0, total_budget - hard_tokens)
-    # Reserve summary space even before a summary exists, so overflow selection and
-    # post-commit assemble use the same turns budget (avoids mid-history gaps).
+    # 摘要尚未入库时也预留空间，使溢出选择与提交后组装用同一 turns 预算（避免历史空洞）
     summary_reserve = 0
     if settings.context_summary_enabled and remaining > 0:
         cap = max(60, remaining // 6)
@@ -370,7 +369,7 @@ def plan_context_budgets(
 
 
 def projected_summary_placeholder(settings: Settings, existing: str | None) -> str | None:
-    """Summary text used when probing final payload size before/without a stored summary."""
+    """在尚无入库摘要时，用于探测最终 payload 体积的占位摘要文本。"""
     if existing:
         return existing
     if not settings.context_summary_enabled:
@@ -389,7 +388,7 @@ def payload_token_count(
     user_defaults: dict[str, Any] | None = None,
     allergies: list[str] | None = None,
 ) -> int:
-    """Estimate tokens of the final serialized parse payload (includes JSON overhead)."""
+    """估算最终序列化 parse payload 的 token（含 JSON 开销）。"""
     ctx = AssembledContext(
         current_message=current_message,
         recent_turns=recent_turns,
@@ -410,14 +409,14 @@ def fit_recent_turns_to_payload(
     token_budget: int,
     probe_tokens,
 ) -> list[RecentTurn]:
-    """Shrink recent turns from the oldest complete pair until full payload fits.
+    """从最旧完整轮次开始收缩近期窗口，直到整个 payload 能塞进预算。
 
     May return an empty list when even the newest complete turn cannot fit — matching
     select_recent_and_overflow, which then puts that turn in the summary overflow.
     """
     if not turns:
         return []
-    # turns are [user, asst, user, asst, ...]; max_turns counts pairs.
+    # turns 为 [user, asst, ...]；max_turns 按「对」计数
     max_messages = max(1, max_turns) * 2
     if len(turns) > max_messages:
         turns = turns[-max_messages:]
@@ -440,7 +439,7 @@ def assemble_context(
     allergies: list[str] | None = None,
     session_state: SessionState | None = None,
 ) -> AssembledContext:
-    """Assemble context by fitting recent turns to the final serialized payload.
+    """组装上下文：按最终序列化 payload 拟合近期轮次。
 
     Optional user_defaults/allergies/session_state must match what the request will
     send to the model so summary overflow selection and assemble agree.
@@ -452,7 +451,7 @@ def assemble_context(
     defaults = dict(user_defaults or {})
     allergy_list = list(allergies or [])
 
-    # Load complete turns after summary boundary, then fit by final JSON payload
+    # 加载摘要边界后的完整轮次，再按最终 JSON payload 拟合
     # (not content-only estimates) so enforce_payload_budget won't drop more turns.
     from app.services.conversation_summary import (
         load_complete_turns,
@@ -499,7 +498,7 @@ def assemble_context(
 
 
 def enforce_payload_budget(ctx: AssembledContext, token_budget: int) -> AssembledContext:
-    """Final guard: drop summary, shrink recipe, then turns until payload fits.
+    """最终守卫：先丢摘要、再压菜谱、再砍轮次，直到 payload 拟合。
 
     Turns are trimmed last so window boundaries chosen by final-payload fitting
     are preserved whenever recipe/summary can absorb the overflow. If hard fields
@@ -523,14 +522,14 @@ def enforce_payload_budget(ctx: AssembledContext, token_budget: int) -> Assemble
         )
         > token_budget
     ):
-        # Lowest priority: drop or truncate background summary first.
+        # 优先级最低：先丢/截背景摘要
         if summary:
             if len(summary) > 120:
                 summary = summary[: max(80, len(summary) // 2)].rstrip() + "…"
             else:
                 summary = None
             continue
-        # Prefer shrinking recipe before dropping recent turns (keeps summary boundary).
+        # 优先压缩菜谱，再砍近期轮次（保住摘要边界）
         if recipe:
             recipe = shrink_recipe_summary(
                 recipe,
@@ -559,7 +558,7 @@ def enforce_payload_budget(ctx: AssembledContext, token_budget: int) -> Assemble
                 )
                 > token_budget
             ):
-                # Only drop recipe entirely after title-only still overflows.
+                # 仅标题仍超预算时才整份丢掉菜谱
                 title_only = {"id": recipe.get("id"), "title": recipe.get("title")}
                 if (
                     estimate_tokens(
@@ -616,6 +615,7 @@ def to_public_context(
     long_term_preferences_version: int | None = None,
     effective_state: SessionState | None = None,
 ) -> PublicContext:
+    """将会话行转为前端 PublicContext。"""
     return PublicContext(
         context_version=session.context_version or 0,
         context_start_message_id=session.context_start_message_id,
@@ -626,12 +626,14 @@ def to_public_context(
 
 
 def serialize_state(state: SessionState | None) -> str | None:
+    """状态对象序列化为落库 JSON。"""
     if state is None:
         return None
     return state.model_dump_json()
 
 
 def serialize_overrides(overrides: SessionOverrides | None) -> str | None:
+    """覆盖标记序列化；全空则返回 None 以节省存储。"""
     if overrides is None:
         return None
     if not overrides.set_fields and not overrides.cleared_fields:
@@ -640,7 +642,7 @@ def serialize_overrides(overrides: SessionOverrides | None) -> str | None:
 
 
 def build_parse_user_payload(ctx: AssembledContext) -> str:
-    """Structured data for the parse LLM call (not system instructions)."""
+    """给 parse LLM 的结构化用户数据（不是系统指令）。"""
     return json.dumps(_payload_dict(ctx), ensure_ascii=False)
 
 
@@ -674,7 +676,7 @@ def _turns_tokens(turns: list[RecentTurn]) -> int:
 
 
 def _focus_index_from_steps(steps: list[str]) -> int | None:
-    """Infer focus from a single labeled step list, if unambiguous."""
+    """若步骤列表可唯一推断焦点，则返回步骤序号。"""
     indices = []
     for step in steps:
         match = _LABELED_STEP_RE.match(str(step).strip())
@@ -688,7 +690,7 @@ def _focus_index_from_steps(steps: list[str]) -> int | None:
 def _pick_non_focus_step_index(
     steps: list[str], focus_step_index: int | None
 ) -> int | None:
-    """Choose a step index to drop, never the focused one when identifiable."""
+    """选择可丢弃的步骤下标；能识别焦点时绝不丢焦点步。"""
     if not steps:
         return None
     if focus_step_index is None:
@@ -700,15 +702,15 @@ def _pick_non_focus_step_index(
         if _labeled_step_number(step) == focus_step_index
     ]
     if not focus_positions:
-        # No labeled match — drop farthest from middle / end.
+        # 无标注匹配：丢离中间/末尾最远的
         return len(steps) - 1
 
     focus_pos = focus_positions[0]
-    # Drop neighbors first (farther end preferred), never the focus itself.
+    # 先丢邻居（偏远端优先），永不丢焦点步本身
     candidates = [i for i in range(len(steps)) if i != focus_pos]
     if not candidates:
         return None
-    # Prefer dropping the farthest neighbor from the focus.
+    # 优先丢离焦点最远的邻居
     return max(candidates, key=lambda i: abs(i - focus_pos))
 
 
@@ -764,14 +766,7 @@ def _parse_step_index(text: str) -> int | None:
 
 
 def _recipe_titles_by_message(db: Session, session_id: str) -> dict[int, str]:
-    rows = (
-        db.query(RecipeRecord)
-        .filter(
-            RecipeRecord.session_id == session_id,
-            RecipeRecord.assistant_message_id.isnot(None),
-        )
-        .all()
-    )
+    rows = conversation_repository.list_recipes_with_assistant_message(db, session_id)
     result: dict[int, str] = {}
     for row in rows:
         if row.assistant_message_id is None:

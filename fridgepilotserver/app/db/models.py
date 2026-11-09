@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM 模型定义（表结构与字段注释）。"""
+
 from __future__ import annotations
 
 from datetime import datetime

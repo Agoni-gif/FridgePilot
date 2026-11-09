@@ -1,3 +1,5 @@
+"""FridgePilot FastAPI 应用入口：生命周期、中间件、路由与异常处理挂载。"""
+
 from __future__ import annotations
 
 import logging
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def _assert_database_policy(settings) -> None:
-    """Local development must use MySQL; SQLite is reserved for production/Docker."""
+    """本地开发必须用 MySQL；SQLite 仅留给生产/Docker。"""
     url = (settings.database_url or "").strip()
     if not url:
         raise RuntimeError(
@@ -42,6 +44,7 @@ def _assert_database_policy(settings) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """启动时初始化日志与数据库，关闭时打日志。"""
     settings = get_settings()
     setup_logging(settings)
     logger.info("Starting FridgePilot server env=%s", settings.app_env)
@@ -53,6 +56,7 @@ async def lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
+    """创建并配置 FastAPI 应用实例。"""
     settings = get_settings()
     app = FastAPI(title="FridgePilot API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(

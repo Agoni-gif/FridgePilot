@@ -1,7 +1,7 @@
-"""Unified API business / error codes.
+"""统一业务/错误码。
 
-Use these constants everywhere instead of hardcoding string literals.
-HTTP status defaults live in ``app.common.response``.
+请使用这些常量，避免在各处硬编码字符串。
+默认 HTTP 状态码见 ``app.common.response``。
 """
 
 from __future__ import annotations
@@ -10,14 +10,14 @@ from enum import StrEnum
 
 
 class ApiCode(StrEnum):
-    # Generic
+    # 通用
     OK = "OK"
     HTTP_ERROR = "HTTP_ERROR"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
 
-    # Auth / identity
+    # 认证 / 身份
     UNAUTHORIZED = "UNAUTHORIZED"
     INVALID_TOKEN = "INVALID_TOKEN"
     INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
@@ -25,25 +25,25 @@ class ApiCode(StrEnum):
     EMAIL_TAKEN = "EMAIL_TAKEN"
     UNKNOWN_PROVIDER = "UNKNOWN_PROVIDER"
 
-    # Captcha
+    # 验证码
     CAPTCHA_FAILED = "CAPTCHA_FAILED"
     CAPTCHA_LOCKED = "CAPTCHA_LOCKED"
     CAPTCHA_RATE_LIMITED = "CAPTCHA_RATE_LIMITED"
     CAPTCHA_ASSET_MISSING = "CAPTCHA_ASSET_MISSING"
 
-    # Session / chat
+    # 会话 / 聊天
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
     SESSION_FORBIDDEN = "SESSION_FORBIDDEN"
     SESSION_BUSY = "SESSION_BUSY"
     SESSION_CONFLICT = "SESSION_CONFLICT"
     INPUT_TOO_LONG = "INPUT_TOO_LONG"
 
-    # Preferences
+    # 偏好
     PREFERENCE_VERSION_CONFLICT = "PREFERENCE_VERSION_CONFLICT"
     PREFERENCE_INVALID = "PREFERENCE_INVALID"
 
 
-# Default user-facing messages. Dynamic messages (e.g. length limits) override these.
+# 默认面向用户的文案；动态消息（如长度限制）可覆盖
 API_CODE_MESSAGES: dict[ApiCode, str] = {
     ApiCode.OK: "ok",
     ApiCode.HTTP_ERROR: "请求失败，请稍后重试。",
@@ -70,7 +70,7 @@ API_CODE_MESSAGES: dict[ApiCode, str] = {
 }
 
 
-# Default HTTP status for each business code.
+# 各业务码默认 HTTP 状态
 API_CODE_HTTP_STATUS: dict[ApiCode, int] = {
     ApiCode.OK: 200,
     ApiCode.HTTP_ERROR: 400,

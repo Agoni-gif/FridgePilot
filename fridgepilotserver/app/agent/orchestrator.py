@@ -1,3 +1,5 @@
+"""Agent 编排器：解析 → 检索 → 总结/解释，产出 AgentOutcome。"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+# 流式进度回调：推送 thinking 文本
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 from app.agent.prompts import (
@@ -57,6 +60,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentOutcome:
+    """一轮 Agent 执行结果，供 ChatService 落库与响应组装。"""
+
     status: str  # completed | insufficient_sources | error | clarification
     recipe: Recipe | None = None
     message: str | None = None
@@ -75,7 +80,7 @@ class AgentOutcome:
 
 
 class AgentOrchestrator:
-    """Fixed pipeline: parse(+context) → merge → clarify|explain|search → summarize."""
+    """固定流水线：解析(+上下文) → 合并 → 澄清|解释|检索 → 总结。"""
 
     def __init__(
         self,
@@ -98,6 +103,7 @@ class AgentOrchestrator:
         preference_patch: PreferencePatch | None = None,
         memory_enabled: bool | None = None,
     ) -> AgentOutcome:
+        """入口：按是否启用会话记忆走上下文流水线或旧版单轮流水线。"""
         started = time.perf_counter()
         thinking_parts: list[str] = []
         use_memory = (
@@ -165,6 +171,7 @@ class AgentOrchestrator:
         started: float,
         thinking_parts: list[str],
     ) -> AgentOutcome:
+        """带会话记忆：上下文解析 → 合并 → 澄清/解释/检索总结。"""
         await self._emit(on_progress, "开始分析本轮意图与做饭条件…")
         logger.info("request_id=%s stage=parse start (memory)", request_id)
         parsed = await self._parse_contextual(context, thinking_parts=thinking_parts)
@@ -253,7 +260,7 @@ class AgentOrchestrator:
                 thinking_parts=thinking_parts,
             )
 
-        # generate / revise — allergies are protective constraints for search/summarize
+        # generate / revise：过敏作为检索/总结的保护性约束
         constraints = self._state_to_constraints(
             merge.state, parsed.search_queries, allergies=allergies
         )
@@ -280,9 +287,8 @@ class AgentOrchestrator:
             self._log_outcome(request_id, outcome)
             return outcome
 
-        # Pass previous recipe as revise context only; exclude titles solely from
-        # explicit exclude_recipe_title / already-stored exclusions — never auto-add
-        # the current dish just because intent is revise (e.g. "改成四人份").
+        # 上一道菜仅作 revise 参考；排除标题只来自显式 exclude / 已存排除列表，
+        # 不要因为 intent=revise（如「改成四人份」）就自动把当前菜加进排除。
         return await self._search_and_summarize(
             constraints=constraints,
             queries=queries,
@@ -310,6 +316,7 @@ class AgentOrchestrator:
         started: float,
         thinking_parts: list[str],
     ) -> AgentOutcome:
+        """无会话记忆：单轮解析约束后直接检索总结。"""
         await self._emit(on_progress, "开始分析用户输入中的食材与约束…")
         logger.info("request_id=%s stage=parse start", request_id)
         constraints = await self._parse_constraints_legacy(
@@ -356,6 +363,7 @@ class AgentOrchestrator:
         started: float,
         thinking_parts: list[str],
     ) -> AgentOutcome:
+        """解释意图：基于已有菜谱回答，不重新搜索。"""
         if not context.last_recipe:
             outcome = AgentOutcome(
                 status="clarification",
@@ -414,6 +422,7 @@ class AgentOrchestrator:
         excluded_titles: list[str],
         exclude_previous_recipe: bool = False,
     ) -> AgentOutcome:
+        """检索 → 过滤 → 总结成可核验菜谱（含来源白名单校验）。"""
         query_preview = "；".join(queries[:3])
         self._append_thinking(
             thinking_parts,
@@ -546,6 +555,7 @@ class AgentOrchestrator:
         return outcome
 
     def _log_outcome(self, request_id: str, outcome: AgentOutcome) -> None:
+        """记录本轮 Agent 结束摘要日志。"""
         logger.info(
             "request_id=%s agent done status=%s intent=%s elapsed_ms=%s search_used=%s recipe=%r sources=%s",
             request_id,
@@ -563,6 +573,7 @@ class AgentOrchestrator:
         *,
         thinking_parts: list[str],
     ) -> ParseResult | None:
+        """带上下文的意图/ops 解析；失败时尝试一次 schema 修复。"""
         result = await self.llm.chat_json(
             system=PARSE_SYSTEM,
             user=build_parse_user_payload(context),
@@ -574,7 +585,7 @@ class AgentOrchestrator:
         if parsed is not None:
             return parsed
 
-        # Limited one-shot schema repair — never invent empty ops for generate/revise.
+        # 有限的一次 schema 修复；不要为 generate/revise 捏造空 ops
         logger.warning("parse result schema invalid; attempting repair")
         repaired = await self.llm.chat_json(
             system=REPAIR_SYSTEM
@@ -596,6 +607,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _validate_parse_result(data: dict[str, Any]) -> ParseResult | None:
+        """校验解析 JSON 是否符合 ParseResult。"""
         try:
             return ParseResult.model_validate(data)
         except ValidationError:
@@ -609,6 +621,7 @@ class AgentOrchestrator:
         *,
         thinking_parts: list[str],
     ) -> UserConstraints:
+        """旧版单轮：从用户消息抽出 UserConstraints。"""
         pref_note = ""
         if preferences:
             pref_note = (
@@ -616,7 +629,7 @@ class AgentOrchestrator:
                 f"servings={preferences.servings}, "
                 f"dietary_restrictions={preferences.dietary_restrictions}"
             )
-        # Minimal single-turn schema compatible with old probe scripts.
+        # 兼容旧探测脚本的最小单轮 schema
         legacy_system = (
             PARSE_SYSTEM
             + "\n本轮无会话上下文时：把用户输入当作首次 generate；"
@@ -641,7 +654,7 @@ class AgentOrchestrator:
         self._append_thinking(thinking_parts, result.reasoning)
         data = await self._maybe_repair(result.data, thinking_parts=thinking_parts)
 
-        # Prefer new ParseResult shape; fall back to old UserConstraints shape.
+        # 优先新 ParseResult 形态；否则回退旧 UserConstraints 形态
         if "ops" in data or "intent" in data:
             parsed = ParseResult.model_validate(data)
             merge = apply_state_ops(empty_state(), empty_overrides(), parsed.ops)
@@ -670,6 +683,7 @@ class AgentOrchestrator:
         *,
         allergies: list[str] | None = None,
     ) -> UserConstraints:
+        """将会话状态转为总结阶段用的 UserConstraints。"""
         return UserConstraints(
             ingredients=list(state.ingredients),
             meal=state.meal,
@@ -684,6 +698,7 @@ class AgentOrchestrator:
     def _build_queries(
         self, constraints: UserConstraints, state: SessionState | None
     ) -> list[str]:
+        """构造检索 query：优先模型给出的，否则按食材启发式生成。"""
         queries = [q.strip() for q in constraints.search_queries if q and q.strip()]
         if queries:
             built = queries[:4]
@@ -711,12 +726,13 @@ class AgentOrchestrator:
             built = [f"{q} {avoid}" for q in built]
 
         if state and state.excluded_recipe_titles:
-            # Soft hint in query text; summarize prompt also enforces exclusion.
+            # 查询里给软提示；总结 prompt 也会强制排除
             exclude = "排除 " + "、".join(state.excluded_recipe_titles[-3:])
             built = [f"{q} {exclude}" for q in built]
         return built[:4]
 
     async def _search_all(self, queries: list[str]) -> list[SearchResult]:
+        """对最多 3 条 query 分别检索并合并结果。"""
         all_results: list[SearchResult] = []
         for query in queries[:3]:
             results = await self.tavily.search(query)
@@ -733,9 +749,9 @@ class AgentOrchestrator:
         target_recipe: dict[str, Any] | None = None,
         excluded_titles: list[str] | None = None,
     ) -> Recipe | None:
+        """根据检索结果总结菜谱；来源必须落在白名单 URL 内。"""
         allowed = allowed_source_urls(results)
-        # Only use explicitly accumulated exclusions — do not auto-exclude the
-        # previous recipe merely because this is a revise (servings/time/taste).
+        # 只用显式累积的排除列表；不要仅因 revise（改人数/时间/口味）就自动排除上一道菜
         exclusions = list(excluded_titles or [])
         payload: dict[str, Any] = {
             "constraints": {
@@ -810,6 +826,7 @@ class AgentOrchestrator:
         allowed: set[str],
         request_id: str = "-",
     ) -> Recipe | None:
+        """校验菜谱结构，并过滤非白名单来源 URL。"""
         try:
             raw_sources = data.get("sources") or []
             trusted: list[dict[str, str]] = []
@@ -855,6 +872,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _clean_display_title(title: str) -> str:
+        """去掉标题里的「可核验来源」等展示噪声。"""
         cleaned = title.strip()
         patterns = [
             r"^可核验来源的?套餐方案[：:\s]*",
@@ -871,6 +889,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _clean_display_text(text: str) -> str:
+        """清理摘要等展示文本中的来源噪声词。"""
         cleaned = re.sub(r"[（(]\s*可核验来源版?\s*[）)]", "", text)
         cleaned = re.sub(r"可核验来源版?", "", cleaned)
         return re.sub(r"\s{2,}", " ", cleaned).strip()
@@ -881,6 +900,7 @@ class AgentOrchestrator:
         *,
         thinking_parts: list[str] | None = None,
     ) -> dict[str, Any]:
+        """若模型未返回 dict，再请求一次修复为 JSON 对象。"""
         if isinstance(data, dict):
             return data
         repaired = await self.llm.chat_json(
@@ -896,6 +916,7 @@ class AgentOrchestrator:
 
     @staticmethod
     async def _emit(on_progress: ProgressCallback | None, text: str | None) -> None:
+        """向流式回调推送一段 thinking 文本。"""
         if not on_progress or not text:
             return
         cleaned = text.strip()
@@ -904,6 +925,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _append_thinking(parts: list[str], text: str | None) -> None:
+        """追加不重复的 thinking 片段。"""
         if not text:
             return
         cleaned = text.strip()
@@ -912,16 +934,19 @@ class AgentOrchestrator:
 
     @staticmethod
     def _join_thinking(parts: list[str]) -> str | None:
+        """合并 thinking 片段供响应返回。"""
         if not parts:
             return None
         return "\n\n".join(parts)
 
     @staticmethod
     def _elapsed(started: float) -> int:
+        """自 started 起的耗时毫秒。"""
         return int((time.perf_counter() - started) * 1000)
 
     @staticmethod
     def _user_facing_upstream_error(exc: Exception) -> str:
+        """将上游异常映射为面向用户的中文提示。"""
         if isinstance(exc, TavilyError):
             return "菜谱搜索暂时不可用，请稍后重试。"
         if isinstance(exc, LLMError):

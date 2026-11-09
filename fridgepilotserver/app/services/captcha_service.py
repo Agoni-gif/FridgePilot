@@ -1,3 +1,5 @@
+"""滑块验证码：出题、校验、限流与素材加载。"""
+
 from __future__ import annotations
 
 import base64
@@ -18,6 +20,7 @@ from app.common.response import ApiException
 
 logger = logging.getLogger(__name__)
 
+# 画布与滑块尺寸、容差、题目有效期
 BG_WIDTH = 320
 BG_HEIGHT = 168
 PIECE_SIZE = 60
@@ -45,6 +48,8 @@ _LOCK_SECONDS = 60.0
 
 @dataclass
 class CaptchaChallenge:
+    """一次滑块题目的内存状态。"""
+
     captcha_id: str
     offset_x: int
     offset_y: int
@@ -56,13 +61,15 @@ class CaptchaChallenge:
 
 @dataclass
 class _RateBucket:
+    """按 client_key 统计创建/失败次数与锁定截止。"""
+
     create_times: list[float] = field(default_factory=list)
     fail_times: list[float] = field(default_factory=list)
     locked_until: float = 0.0
 
 
 class CaptchaError(ApiException):
-    """Captcha-domain API error."""
+    """验证码域业务异常。"""
 
 
 class CaptchaService:
@@ -94,6 +101,7 @@ class CaptchaService:
             self._rate.clear()
 
     def create(self, *, client_key: str = "unknown") -> dict:
+        """创建滑块题目并返回前端渲染所需字段。"""
         now = time.monotonic()
         with self._lock:
             self._purge_expired_unlocked(now)
@@ -190,6 +198,7 @@ class CaptchaService:
             self._challenges.pop(captcha_id, None)
 
     def _parse_offset(self, offset_x: float, *, client_key: str) -> float:
+        """解析滑块 X；非法值记失败并抛错。"""
         try:
             x = float(offset_x)
         except (TypeError, ValueError):
@@ -209,6 +218,7 @@ class CaptchaService:
         client_key: str,
         now: float,
     ) -> CaptchaChallenge:
+        """取有效未消费题目；无效/过期/已用则记失败。须已持锁。"""
         self._assert_not_locked_unlocked(client_key, now)
         if not isinstance(captcha_id, str) or not (8 <= len(captcha_id) <= 64):
             logger.info("captcha rejected reason=bad_id key=%s", client_key)
@@ -230,10 +240,12 @@ class CaptchaService:
         return challenge
 
     def _register_failure(self, client_key: str) -> None:
+        """对外加锁登记一次失败。"""
         with self._lock:
             self._register_failure_unlocked(client_key, time.monotonic())
 
     def _register_failure_unlocked(self, client_key: str, now: float) -> None:
+        """登记失败；达阈值则锁定一段时间。须已持锁。"""
         bucket = self._rate.setdefault(client_key, _RateBucket())
         bucket.fail_times = [t for t in bucket.fail_times if now - t <= _FAIL_WINDOW_S]
         bucket.fail_times.append(now)
@@ -248,6 +260,7 @@ class CaptchaService:
             )
 
     def _assert_not_locked_unlocked(self, client_key: str, now: float) -> None:
+        """若 client 仍在锁定期则抛 CAPTCHA_LOCKED。"""
         bucket = self._rate.get(client_key)
         if bucket is None:
             return
@@ -260,6 +273,7 @@ class CaptchaService:
             )
 
     def _assert_create_allowed_unlocked(self, client_key: str, now: float) -> None:
+        """创建题目限流：窗口内次数超限则拒绝。"""
         bucket = self._rate.setdefault(client_key, _RateBucket())
         bucket.create_times = [t for t in bucket.create_times if now - t <= _CREATE_WINDOW_S]
         if len(bucket.create_times) >= _CREATE_LIMIT:
@@ -267,12 +281,14 @@ class CaptchaService:
         bucket.create_times.append(now)
 
     def _purge_expired_unlocked(self, now: float) -> None:
+        """清理过期题目。须已持锁。"""
         expired = [cid for cid, c in self._challenges.items() if c.expires_at < now]
         for cid in expired:
             self._challenges.pop(cid, None)
 
     @classmethod
     def _discover_backgrounds(cls) -> list[Path]:
+        """扫描 assets/captcha 下可用背景图。"""
         if not BG_DIR.is_dir():
             return []
         paths: list[Path] = []
@@ -287,6 +303,7 @@ class CaptchaService:
         return sorted(paths, key=lambda p: p.name)
 
     def _cover_scaled(self, path: Path) -> Image.Image:
+        """按 cover 策略缩放背景并缓存。"""
         key = str(path.resolve())
         mtime = path.stat().st_mtime
         cached = self._scaled_cache.get(key)
@@ -315,6 +332,7 @@ class CaptchaService:
         return resized
 
     def _load_background(self) -> Image.Image:
+        """随机选一张背景并裁到画布尺寸。"""
         if not self._bg_paths:
             raise CaptchaError(
                 ApiCode.CAPTCHA_ASSET_MISSING,
@@ -329,6 +347,7 @@ class CaptchaService:
         return resized.crop((x, y, x + BG_WIDTH, y + BG_HEIGHT))
 
     def _render(self, offset_x: int, offset_y: int) -> tuple[Image.Image, Image.Image]:
+        """渲染带缺口的背景图与滑块碎片图。"""
         raw = self._load_background()
         soft = self._piece_mask(PIECE_SIZE)
         hard = soft.point(lambda p: 255 if p > 128 else 0)
@@ -354,6 +373,7 @@ class CaptchaService:
         return bg, canvas
 
     def _hole_overlay(self, hard: Image.Image) -> Image.Image:
+        """根据硬遮罩生成缺口半透明覆盖层。"""
         """半透明深底 + 内阴影 + 细亮描边。"""
         hole = Image.new("RGBA", (PIECE_SIZE, PIECE_SIZE), (0, 0, 0, 0))
         hole.paste((12, 16, 28, 175), (0, 0), hard)
@@ -373,6 +393,7 @@ class CaptchaService:
         return Image.alpha_composite(hole, inner_rim)
 
     def _piece_mask(self, size: int) -> Image.Image:
+        """生成拼图块 alpha 遮罩。"""
         """标准拼图块：方身 + 圆头窄颈榫卯（右/下凸，左/上凹）。"""
         scale = 8
         s = size * scale
@@ -384,6 +405,7 @@ class CaptchaService:
 
     @classmethod
     def _jigsaw_outline(cls, s: int) -> list[tuple[float, float]]:
+        """拼图外轮廓折线点列。"""
         """闭合轮廓：真实拼图那种圆头 + 窄颈。"""
         r = s * 0.162
         m = r * 1.62
@@ -480,6 +502,7 @@ class CaptchaService:
 
     @staticmethod
     def _to_data_url(image: Image.Image) -> str:
+        """PNG 转 data URL 供前端展示。"""
         buf = io.BytesIO()
         image.save(buf, format="PNG", optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -487,6 +510,7 @@ class CaptchaService:
 
 
 def _secure_randint(lo: int, hi: int) -> int:
+    """密码学安全的闭区间随机整数。"""
     """含上下界的密码学安全整数。"""
     if hi < lo:
         raise ValueError("hi < lo")
@@ -497,4 +521,5 @@ _captcha_service = CaptchaService()
 
 
 def get_captcha_service() -> CaptchaService:
+    """FastAPI 依赖：返回进程内单例 CaptchaService。"""
     return _captcha_service

@@ -1,3 +1,5 @@
+"""请求日志中间件：分配 request_id 并记录耗时/状态。"""
+
 from __future__ import annotations
 
 import logging
@@ -10,10 +12,13 @@ from starlette.responses import Response
 
 logger = logging.getLogger("app.request")
 
+# 高频探活/文档路径不打 info，避免刷屏
 SKIP_PATHS = {"/api/v1/health", "/docs", "/openapi.json", "/redoc"}
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """为每个请求写入 request_id，并在响应头回传 X-Request-Id。"""
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
         request.state.request_id = request_id

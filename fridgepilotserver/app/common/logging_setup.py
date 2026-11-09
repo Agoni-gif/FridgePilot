@@ -1,3 +1,5 @@
+"""日志初始化与日志文本预览工具。"""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +13,7 @@ _CONFIGURED = False
 
 
 def preview_text(text: str, limit: int = 48) -> str:
-    """Short preview for logs — avoids dumping full user input."""
+    """日志用短预览，避免打出完整用户输入。"""
     cleaned = " ".join((text or "").split())
     if len(cleaned) <= limit:
         return cleaned
@@ -19,6 +21,7 @@ def preview_text(text: str, limit: int = 48) -> str:
 
 
 def setup_logging(settings: Settings) -> None:
+    """配置根日志（控制台 + 可选滚动文件），只初始化一次。"""
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -53,7 +56,7 @@ def setup_logging(settings: Settings) -> None:
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 
-    # Quiet noisy libraries unless debugging
+    # 非调试时压低嘈杂第三方库日志
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)

@@ -1,3 +1,5 @@
+"""会话上下文、状态操作与对外 PublicContext schema。"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -7,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.schemas.recipe import Ingredient
 
 
+# 允许通过 clear 操作清空的状态字段
 CLEARABLE_FIELDS = frozenset(
     {
         "ingredients",
@@ -18,6 +21,7 @@ CLEARABLE_FIELDS = frozenset(
     }
 )
 
+# 允许通过 set 直接写入的标量字段
 SETTABLE_SCALAR_FIELDS = frozenset(
     {
         "meal",
@@ -29,6 +33,8 @@ SETTABLE_SCALAR_FIELDS = frozenset(
 
 
 class SessionState(BaseModel):
+    """会话内已验证的任务状态（可持久化）。"""
+
     schema_version: int = 1
     ingredients: list[Ingredient] = Field(default_factory=list, max_length=30)
     meal: str | None = Field(default=None, max_length=30)
@@ -46,7 +52,7 @@ class SessionState(BaseModel):
 
 
 class SessionOverrides(BaseModel):
-    """Explicit set/clear markers relative to defaults (P0: no long-term defaults)."""
+    """相对默认值的显式 set/clear 标记（区分会话自有与长期默认填充）。"""
 
     set_fields: dict[str, Any] = Field(default_factory=dict)
     cleared_fields: list[str] = Field(default_factory=list)
@@ -63,18 +69,24 @@ class SessionOverrides(BaseModel):
 
 
 class IngredientOps(BaseModel):
+    """食材增量操作：add / remove / 整体 replace。"""
+
     add: list[Ingredient] = Field(default_factory=list, max_length=30)
     remove: list[str] = Field(default_factory=list, max_length=30)
     replace: list[Ingredient] | None = Field(default=None, max_length=30)
 
 
 class DietaryOps(BaseModel):
+    """饮食限制增量操作。"""
+
     add: list[str] = Field(default_factory=list, max_length=10)
     remove: list[str] = Field(default_factory=list, max_length=10)
     replace: list[str] | None = Field(default=None, max_length=10)
 
 
 class StateOps(BaseModel):
+    """解析模型输出的状态变更操作集合。"""
+
     set: dict[str, Any] = Field(default_factory=dict)
     clear: list[str] = Field(default_factory=list)
     ingredients: IngredientOps | None = None
@@ -93,6 +105,8 @@ class StateOps(BaseModel):
 
 
 class PreferencePatch(BaseModel):
+    """聊天请求里对本轮偏好的临时补丁。"""
+
     set: dict[str, Any] = Field(default_factory=dict)
     clear: list[str] = Field(default_factory=list)
 
@@ -111,6 +125,8 @@ IntentKind = Literal["generate", "revise", "explain", "clarify"]
 
 
 class ParseResult(BaseModel):
+    """解析模型输出：意图、澄清、ops、检索词等。"""
+
     thinking: str | None = None
     intent: IntentKind = "generate"
     clarification_question: str | None = Field(default=None, max_length=500)
@@ -121,6 +137,8 @@ class ParseResult(BaseModel):
 
 
 class PublicContext(BaseModel):
+    """对前端公开的会话上下文面板数据。"""
+
     context_version: int = 0
     context_start_message_id: int | None = None
     state: SessionState | None = None
@@ -129,6 +147,8 @@ class PublicContext(BaseModel):
 
 
 class RecentTurn(BaseModel):
+    """近期窗口中的一条用户或助手消息。"""
+
     role: Literal["user", "assistant"]
     content: str
     response_status: str | None = None
@@ -137,7 +157,7 @@ class RecentTurn(BaseModel):
 
 
 class ConversationSummary(BaseModel):
-    """Persisted background summary for turns outside the recent window."""
+    """落库的历史背景摘要（覆盖近期窗口之外的轮次）。"""
 
     text: str = Field(..., min_length=1, max_length=2000)
     covered_from_message_id: int | None = None
@@ -145,6 +165,8 @@ class ConversationSummary(BaseModel):
 
 
 class AssembledContext(BaseModel):
+    """组装后交给 Agent 解析的完整上下文包。"""
+
     current_message: str
     recent_turns: list[RecentTurn] = Field(default_factory=list)
     session_state: SessionState | None = None

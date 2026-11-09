@@ -1,3 +1,9 @@
+"""聊天会话业务：列表、消息、上下文、生成租约与结果落库。
+
+数据访问走 session_repository / conversation_repository；
+租约获取/释放、版本条件提交、flush 时机均由本层协调。
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,13 +12,13 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import AgentOrchestrator, AgentOutcome, ProgressCallback
 from app.common.config import Settings
 from app.common.logging_setup import preview_text
 from app.db.models import MessageRecord, RecipeRecord, SessionRecord
+from app.repositories import conversation_repository, session_repository
 from app.schemas.chat import ChatMeta, ChatPreferences, ChatResponse
 from app.schemas.context import PreferencePatch, PublicContext, SessionState
 from app.schemas.recipe import Recipe
@@ -40,38 +46,37 @@ from app.services.state_merge import (
 
 logger = logging.getLogger(__name__)
 
+# 会话列表标题最大展示长度
 _TITLE_MAX = 36
 
 
 class SessionAccessError(Exception):
-    """Raised when a client tries to resume another user's chat session."""
+    """尝试恢复他人会话。"""
 
 
 class SessionNotFoundError(Exception):
-    """Raised when a session does not exist or is not owned by the user."""
+    """会话不存在或不属于当前用户。"""
 
 
 class SessionBusyError(Exception):
-    """Raised when the session already has an active generation request."""
+    """会话已有进行中的生成租约。"""
 
 
 class SessionConflictError(Exception):
-    """Raised when context_version changed before commit."""
+    """落库前 context_version / 租约已变化。"""
 
 
 class ChatService:
+    """会话与聊天主流程。"""
+
     def __init__(self, settings: Settings, orchestrator: AgentOrchestrator) -> None:
         self.settings = settings
         self.orchestrator = orchestrator
         self.preferences = PreferenceService()
 
     def list_sessions(self, db: Session, *, user_id: str) -> list[SessionSummary]:
-        rows = (
-            db.query(SessionRecord)
-            .filter(SessionRecord.user_id == user_id)
-            .order_by(SessionRecord.last_active_at.desc(), SessionRecord.created_at.desc())
-            .all()
-        )
+        """列出有消息的会话摘要（过滤空会话）。"""
+        rows = session_repository.list_by_user(db, user_id)
         return [
             SessionSummary(
                 id=row.id,
@@ -86,19 +91,10 @@ class ChatService:
     def get_session_messages(
         self, db: Session, *, session_id: str, user_id: str
     ) -> SessionMessagesResponse:
+        """按时间顺序返回消息，并尽量把菜谱挂到对应助手消息。"""
         session = self._require_owned_session(db, session_id, user_id)
-        messages = (
-            db.query(MessageRecord)
-            .filter(MessageRecord.session_id == session_id)
-            .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
-            .all()
-        )
-        recipes = (
-            db.query(RecipeRecord)
-            .filter(RecipeRecord.session_id == session_id)
-            .order_by(RecipeRecord.created_at.asc(), RecipeRecord.id.asc())
-            .all()
-        )
+        messages = conversation_repository.list_messages(db, session_id)
+        recipes = conversation_repository.list_recipes(db, session_id)
         recipe_by_message = self._pair_recipes(messages, recipes)
 
         return SessionMessagesResponse(
@@ -118,6 +114,7 @@ class ChatService:
         )
 
     def get_context(self, db: Session, *, session_id: str, user_id: str) -> PublicContext:
+        """读取对外公开的会话上下文（含长期偏好叠加后的有效状态）。"""
         session = self._require_owned_session(db, session_id, user_id)
         defaults, pref_version = self.preferences.get_enabled_values(db, user_id=user_id)
         state = load_session_state(session)
@@ -134,39 +131,35 @@ class ChatService:
     def ensure_session_available(
         self, db: Session, *, session_id: str | None, user_id: str
     ) -> None:
-        """Validate ownership and reject if an active lease is held (pre-stream check)."""
+        """流式接口前置检查：校验归属，若租约未过期则拒绝。"""
         if not session_id:
             return
         session = self._require_owned_session(db, session_id, user_id)
         now = datetime.now(timezone.utc)
         expires = session.active_request_expires_at
         if session.active_request_id and expires is not None:
-            # Normalize naive timestamps from SQLite.
+            # SQLite 可能返回无时区时间戳，按 UTC 归一
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=timezone.utc)
             if expires >= now:
                 raise SessionBusyError("此对话正在生成，请稍后再试。")
 
     def clear_context(self, db: Session, *, session_id: str, user_id: str) -> PublicContext:
+        """清除会话上下文：抬高消息边界、清空状态/摘要、递增版本并作废租约。"""
         session = self._require_owned_session(db, session_id, user_id)
-        last_msg = (
-            db.query(MessageRecord.id)
-            .filter(MessageRecord.session_id == session_id)
-            .order_by(MessageRecord.id.desc())
-            .first()
-        )
-        session.context_start_message_id = last_msg[0] if last_msg else 0
+        last_msg_id = conversation_repository.get_last_message_id(db, session_id)
+        session.context_start_message_id = last_msg_id if last_msg_id is not None else 0
         session.state_json = None
         session.session_overrides_json = None
         clear_summary_fields(session)
         session.context_version = (session.context_version or 0) + 1
-        # Invalidate any in-flight generation for this session.
+        # 作废进行中的生成，避免旧请求再写入
         session.active_request_id = None
         session.active_request_expires_at = None
         session.last_active_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(session)
-        # After clear, long-term defaults may again apply on next turn.
+        # 清除后下一轮可再次套用长期偏好默认值
         defaults, pref_version = self.preferences.get_enabled_values(db, user_id=user_id)
         applied = defaults is not None
         effective = apply_long_term_defaults(None, empty_overrides(), defaults) if applied else None
@@ -178,16 +171,14 @@ class ChatService:
         )
 
     def delete_session(self, db: Session, *, session_id: str, user_id: str) -> None:
+        """删除会话：菜谱 → 解除消息自引用 → 消息 → 会话，同一事务提交。"""
         session = self._require_owned_session(db, session_id, user_id)
-        # recipes.assistant_message_id → messages.id; clear recipes before messages.
-        db.query(RecipeRecord).filter(RecipeRecord.session_id == session_id).delete()
-        # messages.reply_to_message_id is self-referential; null before bulk delete.
-        db.query(MessageRecord).filter(MessageRecord.session_id == session_id).update(
-            {MessageRecord.reply_to_message_id: None},
-            synchronize_session=False,
-        )
-        db.query(MessageRecord).filter(MessageRecord.session_id == session_id).delete()
-        db.delete(session)
+        # 菜谱外键指向消息，必须先删菜谱
+        conversation_repository.delete_recipes_for_session(db, session_id)
+        # 消息自引用外键需先置空再批量删除
+        conversation_repository.clear_message_reply_refs(db, session_id)
+        conversation_repository.delete_messages_for_session(db, session_id)
+        session_repository.delete(db, session)
         db.commit()
 
     async def handle_chat(
@@ -202,6 +193,7 @@ class ChatService:
         on_progress: ProgressCallback | None = None,
         preference_patch: PreferencePatch | None = None,
     ) -> ChatResponse:
+        """主聊天流程：占租约 →（可选）摘要/组装上下文 → 调用模型 → 条件落库 → 释放租约。"""
         occupy_id = request_id if request_id and request_id != "-" else uuid.uuid4().hex
         session: SessionRecord | None = None
         occupied = False
@@ -253,8 +245,7 @@ class ChatService:
 
             context = None
             if self.settings.session_memory_enabled:
-                # Seed long-term defaults before summary/assemble so final payload
-                # fitting (and overflow coverage) matches what the model will see.
+                # 摘要/组装前先套长期默认，使最终 payload 拟合与溢出覆盖与模型所见一致
                 defaults_dump = (
                     user_defaults.model_dump() if user_defaults is not None else None
                 )
@@ -271,8 +262,7 @@ class ChatService:
                         user_defaults,
                     )
 
-                # P2: compress older complete turns when they fall outside the
-                # recent window. Soft-fail — never block the main request.
+                # 近期窗口外的旧轮次按需摘要；软失败，不阻断主请求
                 try:
                     summary_result = await maybe_refresh_conversation_summary(
                         db,
@@ -362,10 +352,10 @@ class ChatService:
         long_term_applied: bool = False,
         long_term_version: int | None = None,
     ) -> ChatResponse:
-        """Persist results only if version + occupy lease still match (atomic gate)."""
+        """仅当 context_version 与租约仍匹配时才持久化本轮结果（原子门禁）。"""
         try:
             user_msg = self._add_message(db, session.id, "user", message)
-            db.flush()
+            db.flush()  # 需要自增 message.id 供助手消息引用
 
             assistant_text = outcome.message or (
                 outcome.recipe.title if outcome.recipe else outcome.status
@@ -398,7 +388,7 @@ class ChatService:
                     len(outcome.recipe.sources),
                 )
 
-            # State commit rules per PRD §12.2
+            # 状态落库规则见 PRD §12.2
             state_json = session.state_json
             overrides_json = session.session_overrides_json
             next_version = started_version
@@ -406,7 +396,7 @@ class ChatService:
                 merged_overrides = outcome.merged_overrides or empty_overrides()
                 new_state = outcome.merged_state.model_copy(deep=True)
                 if outcome.update_last_recipe and recipe_id is not None:
-                    # Only exclude previous title when user explicitly asked to swap.
+                    # 仅当用户明确要求换菜时，才把上一道菜名加入排除列表
                     if outcome.exclude_previous_recipe and outcome.recipe:
                         titles = [
                             t
@@ -416,7 +406,9 @@ class ChatService:
                         ]
                         prev = None
                         if new_state.last_recipe_id is not None:
-                            prev_row = db.get(RecipeRecord, new_state.last_recipe_id)
+                            prev_row = conversation_repository.get_recipe(
+                                db, new_state.last_recipe_id
+                            )
                             if prev_row and prev_row.session_id == session.id:
                                 try:
                                     prev = Recipe.model_validate_json(
@@ -431,7 +423,7 @@ class ChatService:
                             titles.append(prev)
                         new_state.excluded_recipe_titles = titles[-10:]
                     new_state.last_recipe_id = recipe_id
-                # Do not freeze long-term-default-only fills into session state.
+                # 不要把「仅来自长期默认」的填充冻进会话 state_json
                 before_state = load_session_state(session)
                 persisted = persistable_session_state(
                     before_state, new_state, merged_overrides
@@ -439,26 +431,19 @@ class ChatService:
                 state_json = serialize_state(persisted)
                 overrides_json = serialize_overrides(merged_overrides)
                 next_version = started_version + 1
-                # Response panel should still show the effective merged constraints.
+                # 响应面板仍展示合并后的有效约束
                 outcome.merged_state = new_state
 
-            # Final eligibility gate: version and occupy must still match.
-            updated = (
-                db.query(SessionRecord)
-                .filter(
-                    SessionRecord.id == session.id,
-                    SessionRecord.context_version == started_version,
-                    SessionRecord.active_request_id == occupy_id,
-                )
-                .update(
-                    {
-                        SessionRecord.state_json: state_json,
-                        SessionRecord.session_overrides_json: overrides_json,
-                        SessionRecord.context_version: next_version,
-                        SessionRecord.last_active_at: datetime.now(timezone.utc),
-                    },
-                    synchronize_session=False,
-                )
+            # 最终门禁：版本与租约仍匹配才写入状态
+            updated = session_repository.update_state_if_version_and_lease(
+                db,
+                session_id=session.id,
+                expected_version=started_version,
+                occupy_id=occupy_id,
+                state_json=state_json,
+                overrides_json=overrides_json,
+                next_version=next_version,
+                last_active_at=datetime.now(timezone.utc),
             )
             if updated != 1:
                 db.rollback()
@@ -484,44 +469,28 @@ class ChatService:
             raise
 
     def _try_occupy(self, db: Session, session: SessionRecord, occupy_id: str) -> None:
+        """条件抢占生成租约；失败抛 SessionBusyError。抢占成功后立即 commit。"""
         now = datetime.now(timezone.utc)
         lease = timedelta(seconds=max(60.0, self.settings.request_timeout_seconds * 3))
         expires = now + lease
 
-        # Conditional update: free or expired.
-        updated = (
-            db.query(SessionRecord)
-            .filter(
-                SessionRecord.id == session.id,
-                or_(
-                    SessionRecord.active_request_id.is_(None),
-                    SessionRecord.active_request_expires_at.is_(None),
-                    SessionRecord.active_request_expires_at < now,
-                ),
-            )
-            .update(
-                {
-                    SessionRecord.active_request_id: occupy_id,
-                    SessionRecord.active_request_expires_at: expires,
-                },
-                synchronize_session=False,
-            )
+        # 空闲或已过期才可占用
+        updated = session_repository.try_acquire_lease(
+            db,
+            session_id=session.id,
+            occupy_id=occupy_id,
+            expires_at=expires,
+            now=now,
         )
         db.commit()
         if updated != 1:
             raise SessionBusyError("此对话正在生成，请稍后再试。")
 
     def _release_occupy(self, db: Session, session_id: str, occupy_id: str) -> None:
+        """释放本请求租约；失败只记日志，不向上抛。"""
         try:
-            db.query(SessionRecord).filter(
-                SessionRecord.id == session_id,
-                SessionRecord.active_request_id == occupy_id,
-            ).update(
-                {
-                    SessionRecord.active_request_id: None,
-                    SessionRecord.active_request_expires_at: None,
-                },
-                synchronize_session=False,
+            session_repository.release_lease(
+                db, session_id=session_id, occupy_id=occupy_id
             )
             db.commit()
         except Exception:
@@ -531,8 +500,9 @@ class ChatService:
     def _get_or_create_session(
         self, db: Session, session_id: str | None, *, user_id: str
     ) -> SessionRecord:
+        """恢复已有会话或创建新会话；无主会话会补写 user_id。"""
         if session_id:
-            existing = db.get(SessionRecord, session_id)
+            existing = session_repository.get_by_id(db, session_id)
             if not existing:
                 raise SessionNotFoundError("会话不存在。")
             if existing.user_id and existing.user_id != user_id:
@@ -543,34 +513,26 @@ class ChatService:
             return existing
         new_id = secrets.token_urlsafe(16)
         record = SessionRecord(id=new_id, user_id=user_id, context_version=0)
-        db.add(record)
+        session_repository.add(db, record)
         db.flush()
         return record
 
     def _require_owned_session(
         self, db: Session, session_id: str, user_id: str
     ) -> SessionRecord:
-        session = db.get(SessionRecord, session_id)
+        """要求会话存在且归属当前用户，否则视为不存在。"""
+        session = session_repository.get_by_id(db, session_id)
         if not session or session.user_id != user_id:
             raise SessionNotFoundError("会话不存在。")
         return session
 
     def _session_has_messages(self, db: Session, session_id: str) -> bool:
-        return (
-            db.query(MessageRecord.id)
-            .filter(MessageRecord.session_id == session_id)
-            .limit(1)
-            .first()
-            is not None
-        )
+        """是否至少有一条消息。"""
+        return conversation_repository.has_messages(db, session_id)
 
     def _session_title(self, db: Session, session_id: str) -> str:
-        first = (
-            db.query(MessageRecord)
-            .filter(MessageRecord.session_id == session_id, MessageRecord.role == "user")
-            .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
-            .first()
-        )
+        """用首条用户消息截断生成标题。"""
+        first = conversation_repository.get_first_user_message(db, session_id)
         if not first or not first.content.strip():
             return "新对话"
         text = " ".join(first.content.strip().split())
@@ -583,10 +545,11 @@ class ChatService:
         messages: list[MessageRecord],
         recipes: list[RecipeRecord],
     ) -> dict[int, Recipe]:
+        """将菜谱配对到助手消息：优先显式外键，否则按标题/顺序回退。"""
         paired: dict[int, Recipe] = {}
         used: set[int] = set()
 
-        # Prefer explicit assistant_message_id links.
+        # 优先使用 assistant_message_id 显式关联
         for record in recipes:
             if record.assistant_message_id is None:
                 continue
@@ -598,7 +561,7 @@ class ChatService:
             paired[record.assistant_message_id] = recipe
             used.add(record.id)
 
-        # Legacy heuristic pairing for old rows without explicit links.
+        # 旧数据无显式外键时的启发式配对
         parsed: list[tuple[RecipeRecord, Recipe]] = []
         for record in recipes:
             if record.id in used:
@@ -644,6 +607,7 @@ class ChatService:
         reply_to_message_id: int | None = None,
         response_status: str | None = None,
     ) -> MessageRecord:
+        """构造消息行并加入 Session（调用方负责 flush/commit）。"""
         row = MessageRecord(
             session_id=session_id,
             role=role,
@@ -652,8 +616,7 @@ class ChatService:
             reply_to_message_id=reply_to_message_id,
             response_status=response_status,
         )
-        db.add(row)
-        return row
+        return conversation_repository.add_message(db, row)
 
     def _save_recipe(
         self,
@@ -663,6 +626,7 @@ class ChatService:
         *,
         assistant_message_id: int | None = None,
     ) -> RecipeRecord:
+        """将 Agent 产出的菜谱写入 Session（调用方负责 flush/commit）。"""
         assert outcome.recipe is not None
         row = RecipeRecord(
             session_id=session_id,
@@ -674,8 +638,7 @@ class ChatService:
             prompt_version=outcome.prompt_version,
             assistant_message_id=assistant_message_id,
         )
-        db.add(row)
-        return row
+        return conversation_repository.add_recipe(db, row)
 
     def _to_response(
         self,
@@ -685,6 +648,7 @@ class ChatService:
         long_term_applied: bool = False,
         long_term_version: int | None = None,
     ) -> ChatResponse:
+        """将 AgentOutcome 组装为 API ChatResponse。"""
         effective = outcome.merged_state
         return ChatResponse(
             session_id=session.id,

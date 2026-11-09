@@ -1,3 +1,5 @@
+"""全局异常处理器：统一错误信封与日志。"""
+
 import logging
 
 from fastapi import Request
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """将 HTTPException 转为统一 error 结构。"""
     request_id = getattr(request.state, "request_id", "-")
     detail = exc.detail
     if isinstance(detail, dict) and "code" in detail and "message" in detail:
@@ -33,6 +36,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    """请求体/参数校验失败 → 422。"""
     request_id = getattr(request.state, "request_id", "-")
     logger.warning(
         "request_id=%s validation_error path=%s issues=%s",
@@ -50,6 +54,7 @@ async def validation_exception_handler(
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """未捕获异常 → 500，避免泄露内部细节。"""
     request_id = getattr(request.state, "request_id", "-")
     logger.exception(
         "request_id=%s unhandled_error path=%s: %s",

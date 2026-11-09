@@ -1,3 +1,5 @@
+"""OpenAI 兼容聊天接口封装：请求 JSON 输出并解析。"""
+
 from __future__ import annotations
 
 import json
@@ -14,16 +16,20 @@ logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
-    """Raised when the LLM provider fails."""
+    """LLM 调用失败。"""
 
 
 @dataclass
 class LLMJsonResult:
+    """模型返回的 JSON 与可选 reasoning。"""
+
     data: dict[str, Any]
     reasoning: str | None = None
 
 
 class LLMProvider:
+    """调用配置中的 chat completions 端点。"""
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.base_url = settings.llm_base_url.rstrip("/")
@@ -37,8 +43,9 @@ class LLMProvider:
         system: str,
         user: str,
         temperature: float = 0.2,
-        purpose: str = "chat_json",
+        purpose: str = "chat_json",  # 日志用途标签
     ) -> LLMJsonResult:
+        """调用 chat completions，要求 JSON 对象输出；临时错误最多重试一次。"""
         if not self.api_key:
             raise LLMError("LLM_API_KEY is not configured")
 
@@ -122,6 +129,7 @@ class LLMProvider:
 
     @staticmethod
     def _collect_reasoning(message: dict[str, Any], parsed: Any) -> str | None:
+        """合并 API reasoning_content 与 JSON 内 thinking 字段。"""
         parts: list[str] = []
         api_reasoning = message.get("reasoning_content")
         if isinstance(api_reasoning, str) and api_reasoning.strip():
@@ -132,11 +140,12 @@ class LLMProvider:
                 parts.append(field.strip())
         if not parts:
             return None
-        # Prefer API chain-of-thought when both exist; keep JSON thinking as supplement.
+        # 两者都有时优先保留 API 思维链，JSON thinking 作补充
         return "\n\n".join(parts)
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any]:
+        """解析模型 content：支持去掉 markdown 代码围栏。"""
         text = content.strip()
         if text.startswith("```"):
             lines = text.splitlines()

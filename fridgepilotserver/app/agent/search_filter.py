@@ -1,9 +1,12 @@
+"""检索结果过滤：URL 规范化、菜谱相关性筛选与白名单。"""
+
 from __future__ import annotations
 
 from urllib.parse import urlparse, urlunparse
 
 from app.schemas.recipe import MAX_SOURCE_URL_LENGTH, SearchResult
 
+# 标题/摘要中出现这些词时更可能是菜谱页
 RECIPE_HINTS = (
     "菜谱",
     "做法",
@@ -24,8 +27,8 @@ MAX_TOTAL_CHARS = 5000
 
 
 def normalize_url(url: str) -> str:
+    """去掉 fragment，并轻度规范路径末尾斜杠。"""
     parsed = urlparse(url.strip())
-    # Drop fragment and normalize trailing slash lightly
     path = parsed.path.rstrip("/") or "/"
     return urlunparse(
         (parsed.scheme.lower(), parsed.netloc.lower(), path, "", parsed.query, "")
@@ -33,6 +36,7 @@ def normalize_url(url: str) -> str:
 
 
 def dedupe_results(results: list[SearchResult]) -> list[SearchResult]:
+    """按规范化 URL 去重，保留先出现的结果。"""
     seen: set[str] = set()
     unique: list[SearchResult] = []
     for item in results:
@@ -47,14 +51,16 @@ def dedupe_results(results: list[SearchResult]) -> list[SearchResult]:
 
 
 def looks_relevant(item: SearchResult, ingredients: list[str]) -> bool:
+    """标题/内容是否像菜谱页或命中食材关键词。"""
     blob = f"{item.title} {item.content}".lower()
     if any(hint.lower() in blob for hint in RECIPE_HINTS):
         return True
-    # At least one ingredient appears
+    # 至少命中一个食材名
     return any(name.lower() in blob for name in ingredients if name)
 
 
 def truncate_content(text: str, limit: int = MAX_CONTENT_CHARS) -> str:
+    """截断检索正文，控制送入模型的长度。"""
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
@@ -67,9 +73,10 @@ def filter_search_results(
     ingredients: list[str],
     max_results: int = 5,
 ) -> list[SearchResult]:
+    """去重、相关性筛选并截断，控制结果条数与总字符。"""
     cleaned = dedupe_results(results)
     relevant = [r for r in cleaned if looks_relevant(r, ingredients)]
-    # If filtering removed everything, keep original unique set as fallback
+    # 过滤后为空则回退到去重后的全集
     pool = relevant or cleaned
 
     selected: list[SearchResult] = []
@@ -93,4 +100,5 @@ def filter_search_results(
 
 
 def allowed_source_urls(results: list[SearchResult]) -> set[str]:
+    """由检索结果生成允许引用的来源 URL 白名单。"""
     return {normalize_url(r.url) for r in results}

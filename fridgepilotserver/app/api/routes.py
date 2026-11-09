@@ -1,3 +1,5 @@
+"""聊天与会话主路由：健康检查、会话 CRUD、同步/流式聊天。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_orchestrator(settings: Settings = Depends(get_settings)) -> AgentOrchestrator:
+    """注入 Agent 编排器。"""
     return AgentOrchestrator(settings)
 
 
@@ -40,11 +43,13 @@ def get_chat_service(
     settings: Settings = Depends(get_settings),
     orchestrator: AgentOrchestrator = Depends(get_orchestrator),
 ) -> ChatService:
+    """注入聊天业务服务。"""
     return ChatService(settings, orchestrator)
 
 
 @router.get("/health")
 async def health() -> dict[str, str]:
+    """健康检查，附带当前数据库方言名。"""
     from app.db.session import engine
 
     return {"status": "ok", "db": engine.dialect.name}
@@ -56,6 +61,7 @@ async def list_sessions(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> SessionListResponse:
+    """列出当前用户会话。"""
     return SessionListResponse(sessions=service.list_sessions(db, user_id=user.id))
 
 
@@ -66,6 +72,7 @@ async def get_session_messages(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> SessionMessagesResponse:
+    """获取会话消息列表。"""
     try:
         return service.get_session_messages(db, session_id=session_id, user_id=user.id)
     except SessionNotFoundError as exc:
@@ -79,6 +86,7 @@ async def get_session_context(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> PublicContext:
+    """获取会话公开上下文。"""
     try:
         return service.get_context(db, session_id=session_id, user_id=user.id)
     except SessionNotFoundError as exc:
@@ -92,6 +100,7 @@ async def clear_session_context(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> PublicContext:
+    """清除会话上下文（抬高消息边界并作废租约）。"""
     try:
         return service.clear_context(db, session_id=session_id, user_id=user.id)
     except SessionNotFoundError as exc:
@@ -105,6 +114,7 @@ async def delete_session(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> Response:
+    """删除整个会话及其消息/菜谱。"""
     try:
         service.delete_session(db, session_id=session_id, user_id=user.id)
     except SessionNotFoundError as exc:
@@ -113,6 +123,7 @@ async def delete_session(
 
 
 def _validate_chat_length(body: ChatRequest, settings: Settings, request_id: str) -> None:
+    """校验用户输入长度上限。"""
     if len(body.message) > settings.max_message_length:
         logger.warning(
             "request_id=%s chat rejected: input too long len=%s",
@@ -126,6 +137,7 @@ def _validate_chat_length(body: ChatRequest, settings: Settings, request_id: str
 
 
 def _http_from_session_error(exc: Exception):
+    """将会话域异常映射为 HTTP 业务错误。"""
     if isinstance(exc, SessionNotFoundError):
         return api_error(ApiCode.SESSION_NOT_FOUND, str(exc))
     if isinstance(exc, SessionAccessError):
@@ -138,6 +150,7 @@ def _http_from_session_error(exc: Exception):
 
 
 def _sse_error(code: ApiCode, message: str | None = None) -> dict:
+    """构造 SSE 错误事件载荷。"""
     return {"type": "error", **error_detail(code, message)}
 
 
@@ -150,6 +163,7 @@ async def chat(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> ChatResponse:
+    """同步聊天：一次请求返回完整结果。"""
     request_id = getattr(request.state, "request_id", "-")
     _validate_chat_length(body, settings, request_id)
 
@@ -200,6 +214,7 @@ async def chat_stream(
     service: ChatService = Depends(get_chat_service),
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    """流式聊天：SSE 推送 thinking / done / error 事件。"""
     request_id = getattr(request.state, "request_id", "-")
     _validate_chat_length(body, settings, request_id)
 
@@ -213,8 +228,7 @@ async def chat_stream(
 
     user_id = user.id
 
-    # Pre-validate ownership / busy lease before opening SSE so clients can get
-    # HTTP 404/403/409 instead of only an in-band error event.
+    # 打开 SSE 前先校验归属/租约，便于直接返回 HTTP 404/403/409，而不只靠带内错误事件
     try:
         service.ensure_session_available(
             db, session_id=body.session_id, user_id=user_id
@@ -225,7 +239,9 @@ async def chat_stream(
         SessionBusyError,
     ) as exc:
         raise _http_from_session_error(exc) from exc
+
     async def event_stream() -> AsyncIterator[str]:
+        """后台跑 handle_chat，前台把队列事件写成 SSE。"""
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
         async def on_progress(text: str) -> None:

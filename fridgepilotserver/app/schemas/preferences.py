@@ -1,3 +1,5 @@
+"""用户长期做饭偏好 schema。"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class PreferenceValues(BaseModel):
-    """Whitelisted long-term cooking defaults (excluding enable/version)."""
+    """长期做饭默认值白名单字段（不含 enable/version）。"""
 
     servings: int | None = Field(default=None, ge=1, le=20)
     max_time_minutes: int | None = Field(default=None, ge=1, le=300)
@@ -35,6 +37,8 @@ class PreferenceValues(BaseModel):
 
 
 class UserPreferencesResponse(BaseModel):
+    """偏好读写 API 响应。"""
+
     enabled: bool = False
     preferences: PreferenceValues = Field(default_factory=PreferenceValues)
     version: int = 0
@@ -43,7 +47,7 @@ class UserPreferencesResponse(BaseModel):
 
 
 class UserPreferencesPatch(BaseModel):
-    """Partial update with optimistic locking."""
+    """带乐观锁 version 的偏好部分更新。"""
 
     version: int = Field(..., ge=0)
     enabled: bool | None = None

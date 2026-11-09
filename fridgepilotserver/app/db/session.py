@@ -1,3 +1,5 @@
+"""数据库引擎、Session 工厂与启动初始化（含轻量 DDL 兼容）。"""
+
 from __future__ import annotations
 
 from collections.abc import Generator
@@ -12,10 +14,11 @@ from app.common.config import get_settings
 
 
 class Base(DeclarativeBase):
-    pass
+    """SQLAlchemy ORM 基类。"""
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:
+    """SQLite 文件路径不存在时创建父目录。"""
     if not database_url.startswith("sqlite:///"):
         return
     raw = database_url.removeprefix("sqlite:///")
@@ -28,14 +31,17 @@ def _ensure_sqlite_dir(database_url: str) -> None:
 
 
 def _is_sqlite(database_url: str) -> bool:
+    """是否为 SQLite URL。"""
     return database_url.startswith("sqlite:")
 
 
 def _is_mysql(database_url: str) -> bool:
+    """是否为 MySQL URL。"""
     return database_url.startswith("mysql:") or database_url.startswith("mysql+")
 
 
 def create_db_engine(database_url: str) -> Engine:
+    """按方言创建引擎；SQLite 开启外键，MySQL 开启连接保活。"""
     _ensure_sqlite_dir(database_url)
 
     if _is_sqlite(database_url):
@@ -52,7 +58,7 @@ def create_db_engine(database_url: str) -> Engine:
 
         return engine
 
-    # MySQL / other dialects
+    # MySQL 及其他方言
     return create_engine(
         database_url,
         pool_pre_ping=True,
@@ -66,7 +72,8 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
-    # Import models so metadata is populated
+    """创建库表并做轻量列补齐（非完整迁移框架）。"""
+    # 导入模型以填充 metadata
     from app.db import models  # noqa: F401
 
     if _is_mysql(settings.database_url):
@@ -77,7 +84,7 @@ def init_db() -> None:
 
 
 def _ensure_columns() -> None:
-    """Add columns that create_all will not alter on existing tables."""
+    """为已有表补齐 create_all 不会自动 ALTER 的列。"""
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
@@ -206,18 +213,18 @@ def _ensure_columns() -> None:
                         )
                     )
             except Exception:
-                # Index may already exist on MySQL / re-runs.
+                # MySQL / 重复执行时索引可能已存在
                 pass
 
 
 def _ensure_mysql_database(database_url: str) -> None:
-    """Create the target schema if it does not exist (local MySQL convenience)."""
+    """本地 MySQL 便利：目标库不存在时自动创建。"""
     parsed = urlparse(database_url)
     db_name = (parsed.path or "").lstrip("/")
     if not db_name:
         return
 
-    # Connect to server without selecting the database
+    # 先连到服务器，不指定具体库
     server_url = database_url.rsplit("/", 1)[0] + "/"
     server_engine = create_engine(server_url, pool_pre_ping=True)
     try:
@@ -231,6 +238,7 @@ def _ensure_mysql_database(database_url: str) -> None:
 
 
 def get_db() -> Generator[Session, None, None]:
+    """请求级 Session：用完关闭；commit/rollback 由业务层决定。"""
     db = SessionLocal()
     try:
         yield db

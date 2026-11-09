@@ -1,3 +1,5 @@
+"""Tavily 网页检索客户端。"""
+
 from __future__ import annotations
 
 import logging
@@ -14,16 +16,19 @@ TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 
 class TavilyError(Exception):
-    """Raised when Tavily search fails."""
+    """Tavily 检索失败。"""
 
 
 class TavilyProvider:
+    """按查询返回 SearchResult 列表。"""
+
     def __init__(self, settings: Settings) -> None:
         self.api_key = settings.tavily_api_key
         self.timeout = settings.request_timeout_seconds
         self.max_results = settings.max_search_results
 
     async def search(self, query: str, *, max_results: int | None = None) -> list[SearchResult]:
+        """执行一次检索；未配置 API Key 时抛错。"""
         if not self.api_key:
             raise TavilyError("TAVILY_API_KEY is not configured")
 

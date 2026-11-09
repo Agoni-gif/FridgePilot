@@ -1,3 +1,5 @@
+"""认证相关请求/响应 schema。"""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +10,8 @@ USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,32}$")
 
 
 class RegisterRequest(BaseModel):
+    """用户注册请求。"""
+
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=8, max_length=128)
     email: EmailStr | None = None
@@ -39,6 +43,7 @@ class LoginRequest(BaseModel):
 
 
 class CaptchaChallengeResponse(BaseModel):
+    """下发滑块题目给前端。"""
     captcha_id: str
     bg_image: str
     piece_image: str
@@ -50,30 +55,36 @@ class CaptchaChallengeResponse(BaseModel):
 
 
 class CaptchaVerifyRequest(BaseModel):
+    """前端预校验滑块位置。"""
     captcha_id: str = Field(min_length=8, max_length=64)
     captcha_x: float = Field(ge=0, le=1000)
 
 
 class CaptchaVerifyResponse(BaseModel):
+    """滑块预校验结果。"""
     ok: bool = True
 
 
 class UserPublic(BaseModel):
+    """对外公开的用户信息。"""
     id: str
     username: str
     email: str | None = None
 
 
 class AuthTokenResponse(BaseModel):
+    """登录/注册成功返回的令牌与用户。"""
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
 
 
 class PhoneSendCodeRequest(BaseModel):
+    """预留：手机发码请求。"""
     phone: str = Field(min_length=5, max_length=32)
 
 
 class PhoneLoginRequest(BaseModel):
+    """预留：手机登录请求。"""
     phone: str = Field(min_length=5, max_length=32)
     code: str = Field(min_length=4, max_length=12)

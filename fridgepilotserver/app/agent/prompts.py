@@ -1,3 +1,8 @@
+"""Agent 系统提示词与版本号。
+
+各常量是发给 LLM 的 system prompt；改提示时同步 bump PROMPT_VERSION。
+"""
+
 PROMPT_VERSION = "v5"
 
 PARSE_SYSTEM = """你是 FridgePilot 的会话解析助手。
@@ -111,5 +116,5 @@ SUMMARIZE_SYSTEM = """你是 FridgePilot 的菜谱整理助手。
 
 REPAIR_SYSTEM = """你是 JSON 修复助手。将用户给出的内容修复为合法 JSON 对象，只输出 JSON。若原内容含 thinking 字段请保留。"""
 
-# Backward-compatible alias used by older probe scripts.
+# 兼容旧探测脚本的别名说明
 LEGACY_PARSE_NOTE = "v4 single-turn parse replaced by v5 contextual parse"

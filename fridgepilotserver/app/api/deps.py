@@ -1,3 +1,5 @@
+"""FastAPI 依赖注入：认证服务、当前用户解析。"""
+
 from __future__ import annotations
 
 import jwt
@@ -11,9 +13,11 @@ from app.common.response import api_error
 from app.common.security import decode_access_token
 from app.db.models import User
 from app.db.session import get_db
+from app.repositories import user_repository
 from app.services.auth_service import AuthService
 from app.services.captcha_service import CaptchaService, get_captcha_service
 
+# 不自动抛 403，便于统一返回业务错误码
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -21,6 +25,7 @@ def get_auth_service(
     settings: Settings = Depends(get_settings),
     captcha: CaptchaService = Depends(get_captcha_service),
 ) -> AuthService:
+    """构造 AuthService 实例。"""
     return AuthService(settings, captcha)
 
 
@@ -30,6 +35,7 @@ def get_current_user(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> User:
+    """从 Bearer JWT 解析并加载当前用户；失败抛统一未授权错误。"""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise api_error(ApiCode.UNAUTHORIZED)
 
@@ -38,7 +44,7 @@ def get_current_user(
     except jwt.PyJWTError:
         raise api_error(ApiCode.INVALID_TOKEN) from None
 
-    user = db.get(User, user_id)
+    user = user_repository.get_by_id(db, user_id)
     if user is None:
         raise api_error(ApiCode.UNAUTHORIZED)
 

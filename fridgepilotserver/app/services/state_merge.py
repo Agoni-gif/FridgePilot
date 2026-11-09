@@ -1,3 +1,5 @@
+"""会话状态合并：长期偏好默认值、本轮补丁、可持久化状态裁剪。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,7 +17,7 @@ from app.schemas.context import (
 from app.schemas.recipe import Ingredient, Recipe
 
 
-# Opposite dietary phrases that should replace each other rather than coexist.
+# 互斥饮食表述：应互相替换，而不是同时保留
 _DIETARY_OPPOSITES: list[tuple[set[str], set[str]]] = [
     ({"不辣", "不要辣", "忌辣", "少辣"}, {"可以辣", "要辣", "能辣", "放辣"}),
     ({"不吃香菜", "不要香菜", "忌香菜"}, {"可以香菜", "能放香菜", "这次可以放香菜"}),
@@ -24,6 +26,8 @@ _DIETARY_OPPOSITES: list[tuple[set[str], set[str]]] = [
 
 @dataclass
 class MergeResult:
+    """状态合并结果；ok=False 时 clarification 给前端追问文案。"""
+
     state: SessionState
     overrides: SessionOverrides
     ok: bool = True
@@ -31,10 +35,12 @@ class MergeResult:
 
 
 def empty_state() -> SessionState:
+    """空任务状态。"""
     return SessionState()
 
 
 def empty_overrides() -> SessionOverrides:
+    """空覆盖标记。"""
     return SessionOverrides()
 
 
@@ -43,10 +49,10 @@ def persistable_session_state(
     after: SessionState,
     overrides: SessionOverrides,
 ) -> SessionState:
-    """Persist only session-owned fields; leave default-only fills out of state_json.
+    """只持久化会话自有字段；长期默认值填入的内容不写进 state_json。
 
-    Ingredients / excluded titles / last_recipe always come from the merged result.
-    Scalars and dietary lists persist only when explicitly set or cleared this session.
+    食材 / 排除菜名 / last_recipe 始终取合并结果。
+    标量与饮食列表仅在本会话显式 set/clear 过时才持久化。
     """
     out = (before or empty_state()).model_copy(deep=True)
     out.ingredients = list(after.ingredients)
@@ -64,6 +70,7 @@ def persistable_session_state(
 
 
 def parse_state_json(raw: str | None) -> SessionState | None:
+    """解析会话状态 JSON；损坏则返回 None。"""
     if not raw:
         return None
     try:
@@ -73,6 +80,7 @@ def parse_state_json(raw: str | None) -> SessionState | None:
 
 
 def parse_overrides_json(raw: str | None) -> SessionOverrides:
+    """解析覆盖标记 JSON；损坏则返回空覆盖。"""
     if not raw:
         return empty_overrides()
     try:
@@ -82,7 +90,7 @@ def parse_overrides_json(raw: str | None) -> SessionOverrides:
 
 
 def preferences_to_ops(preferences: ChatPreferences | None) -> StateOps:
-    """Legacy preferences: only non-empty values become set ops; null/[] ignored."""
+    """兼容旧版单轮 preferences：仅非空值转为 set ops；null/[] 忽略。"""
     from app.schemas.context import DietaryOps
 
     ops = StateOps()
@@ -98,13 +106,14 @@ def preferences_to_ops(preferences: ChatPreferences | None) -> StateOps:
 
 
 def preference_patch_to_ops(patch: PreferencePatch | None) -> StateOps:
+    """将前端 preference_patch 转为 StateOps。"""
     if not patch:
         return StateOps()
     return StateOps(set=dict(patch.set), clear=list(patch.clear))
 
 
 def merge_ops(*ops_list: StateOps) -> StateOps:
-    """Merge multiple op batches; later ops win for the same scalar set/clear."""
+    """合并多批 ops；同一标量 set/clear 以后者为准。"""
     from app.schemas.context import DietaryOps, IngredientOps
 
     merged = StateOps()
@@ -135,9 +144,9 @@ def merge_ops(*ops_list: StateOps) -> StateOps:
                     ops.ingredients.add or ops.ingredients.remove
                 ):
                     pass
-                # Accumulate add/remove onto current replace or add lists.
+                # 把 add/remove 累积到当前 replace 或 add 列表
                 if ing.replace is not None:
-                    # Apply remove/add onto the replace list as working set.
+                    # 在 replace 工作集上应用 remove/add
                     working = _apply_ingredient_delta(
                         list(ing.replace),
                         add=ops.ingredients.add,
@@ -185,10 +194,10 @@ def apply_long_term_defaults(
     overrides: SessionOverrides | None,
     defaults: Any | None,
 ) -> SessionState:
-    """Fill unset session fields from enabled long-term defaults.
+    """用已启用的长期偏好填充会话中尚未设置的字段。
 
-    Cleared fields and already-set session values are not overwritten.
-    Does not write allergies into session state (allergies are protective only).
+    已 clear 的字段与会话已有值不会被覆盖。
+    过敏声明不写入会话状态（仅作保护性约束）。
     """
     base = (current or empty_state()).model_copy(deep=True)
     if defaults is None:
@@ -225,13 +234,12 @@ def detect_allergy_conflict(
     allergies: list[str] | None,
     ops: StateOps,
 ) -> str | None:
-    """Return a blocking clarification when this round conflicts with allergies.
+    """本轮 ops 与过敏声明冲突时返回阻断性澄清文案。
 
-    Allergies are hard constraints: chat cannot temporarily override them.
-    Conflicts:
-    - dietary text that allows an allergen (e.g. allergy=香菜, add=可以放香菜)
-    - removing a restriction that mentions the allergen
-    - adding/replacing ingredients whose name matches an allergen
+    过敏是硬约束，对话不能临时覆盖。冲突包括：
+    - 饮食表述允许过敏原（如 allergy=香菜，add=可以放香菜）
+    - 移除提及过敏原的限制
+    - 新增/替换食材名命中过敏原
     """
     if not allergies:
         return None
@@ -284,7 +292,7 @@ def detect_allergy_conflict(
 def recipe_conflicts_with_allergies(
     recipe: Recipe, allergies: list[str] | None
 ) -> str | None:
-    """Return the first allergen found in recipe text, or None if clear."""
+    """若菜谱文本命中过敏原则返回第一个，否则 None。"""
     if not allergies:
         return None
     haystack = " ".join(
@@ -304,7 +312,7 @@ def recipe_conflicts_with_allergies(
 
 
 def _allows_allergen(text: str, allergy: str) -> bool:
-    """Heuristic: phrases that permit an allergen despite allergy declaration."""
+    """启发式：文案在声明过敏的同时是否又允许该过敏原。"""
     t = text.strip()
     if not t or allergy not in t:
         return False
@@ -322,11 +330,11 @@ def apply_state_ops(
     *,
     require_ingredients_for_generate: bool = False,
 ) -> MergeResult:
-    """Deterministically apply validated ops onto session state."""
+    """将已校验的 ops 确定性应用到会话状态。"""
     base = (current or empty_state()).model_copy(deep=True)
     ov = (overrides or empty_overrides()).model_copy(deep=True)
 
-    # Validate scalar set keys / values first; reject whole batch on illegal ops.
+    # 先校验标量 set；非法则整批拒绝
     try:
         _validate_ops(ops)
     except ValueError as exc:
@@ -337,14 +345,14 @@ def apply_state_ops(
             clarification=str(exc),
         )
 
-    # Clear fields
+    # 清空字段
     for field in ops.clear:
         _clear_field(base, field)
         if field not in ov.cleared_fields:
             ov.cleared_fields.append(field)
         ov.set_fields.pop(field, None)
 
-    # Scalar sets
+    # 标量 set
     for key, value in ops.set.items():
         if key not in SETTABLE_SCALAR_FIELDS:
             continue
@@ -352,7 +360,7 @@ def apply_state_ops(
         ov.set_fields[key] = value
         ov.cleared_fields = [c for c in ov.cleared_fields if c != key]
 
-    # Ingredients
+    # 食材
     if ops.ingredients is not None:
         ing_ops = ops.ingredients
         if ing_ops.replace is not None:
@@ -371,7 +379,7 @@ def apply_state_ops(
         if not base.ingredients and "ingredients" in ops.clear:
             pass
 
-    # Dietary restrictions
+    # 饮食限制
     if ops.dietary_restrictions is not None:
         d_ops = ops.dietary_restrictions
         if d_ops.replace is not None:
@@ -411,6 +419,7 @@ def apply_state_ops(
 
 
 def state_to_constraints_dict(state: SessionState) -> dict[str, Any]:
+    """会话状态转给总结模型用的约束字典。"""
     return {
         "ingredients": [i.model_dump() for i in state.ingredients],
         "meal": state.meal,
@@ -423,6 +432,7 @@ def state_to_constraints_dict(state: SessionState) -> dict[str, Any]:
 
 
 def _validate_ops(ops: StateOps) -> None:
+    """校验 set 字段合法性与取值范围。"""
     for key, value in ops.set.items():
         if key not in SETTABLE_SCALAR_FIELDS and key not in CLEARABLE_FIELDS:
             raise ValueError(f"不支持设置字段：{key}")
@@ -441,6 +451,7 @@ def _validate_ops(ops: StateOps) -> None:
 
 
 def _clear_field(state: SessionState, field: str) -> None:
+    """按字段名清空状态值。"""
     if field == "ingredients":
         state.ingredients = []
     elif field == "dietary_restrictions":
@@ -450,14 +461,17 @@ def _clear_field(state: SessionState, field: str) -> None:
 
 
 def _same_ingredient(a: str, b: str) -> bool:
+    """食材名是否视为同一项（忽略大小写空白）。"""
     return a.strip().casefold() == b.strip().casefold()
 
 
 def _same_text(a: str, b: str) -> bool:
+    """文本是否相等（忽略大小写空白）。"""
     return a.strip().casefold() == b.strip().casefold()
 
 
 def _normalize_ingredients(items: list[Ingredient]) -> list[Ingredient]:
+    """清洗食材名与用量空白。"""
     result: list[Ingredient] = []
     for item in items:
         name = item.name.strip()
@@ -478,6 +492,7 @@ def _normalize_ingredients(items: list[Ingredient]) -> list[Ingredient]:
 def _merge_ingredients(
     current: list[Ingredient], additions: list[Ingredient]
 ) -> list[Ingredient]:
+    """合并食材列表并规范化。"""
     return _normalize_ingredients([*current, *additions])
 
 
@@ -487,6 +502,7 @@ def _apply_ingredient_delta(
     add: list[Ingredient],
     remove: list[str],
 ) -> list[Ingredient]:
+    """先按名移除，再追加新增食材。"""
     working = [
         i
         for i in current
@@ -496,6 +512,7 @@ def _apply_ingredient_delta(
 
 
 def _normalize_dietary(items: list[str]) -> list[str]:
+    """规范化饮食限制列表（含互斥替换）。"""
     result: list[str] = []
     for raw in items:
         text = raw.strip()
@@ -506,6 +523,7 @@ def _normalize_dietary(items: list[str]) -> list[str]:
 
 
 def _merge_dietary(current: list[str], additions: list[str]) -> list[str]:
+    """合并饮食限制，逐条走互斥替换逻辑。"""
     result = list(current)
     for raw in additions:
         text = raw.strip()
@@ -517,6 +535,7 @@ def _merge_dietary(current: list[str], additions: list[str]) -> list[str]:
 def _apply_dietary_delta(
     current: list[str], *, add: list[str], remove: list[str]
 ) -> list[str]:
+    """先移除再追加饮食限制。"""
     working = [
         x for x in current if not any(_same_text(x, name) for name in remove)
     ]
@@ -524,7 +543,7 @@ def _apply_dietary_delta(
 
 
 def _add_dietary(current: list[str], text: str) -> list[str]:
-    """Add a dietary restriction, replacing opposite phrases when detected."""
+    """加入饮食限制；若检测到互斥表述则替换对立项。"""
     result = list(current)
     for left, right in _DIETARY_OPPOSITES:
         in_left = any(_same_text(text, x) for x in left)

@@ -1,12 +1,11 @@
-"""Unified API response helpers.
+"""统一 API 响应辅助。
 
-Error envelope (kept for frontend compatibility)::
+错误信封（兼容前端）::
 
     {"error": {"code": "...", "message": "...", "details"?: ...}}
 
-Success responses continue to return the resource/body directly via
-``response_model``. Use ``ApiCode`` + these helpers instead of hardcoding
-``detail={"code": ..., "message": ...}`` in every route.
+成功响应仍通过 ``response_model`` 直接返回资源体。
+请用 ``ApiCode`` + 本模块助手，避免在路由里硬编码 detail 字典。
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ class ErrorResponse(BaseModel):
 
 
 class SuccessResponse(BaseModel):
-    """Optional envelope when an endpoint wants an explicit ok wrapper."""
+    """可选的显式成功包装（多数接口直接返回资源体）。"""
 
     code: str = ApiCode.OK
     message: str = API_CODE_MESSAGES[ApiCode.OK]
@@ -38,6 +37,7 @@ class SuccessResponse(BaseModel):
 
 
 def resolve_code(code: ApiCode | str) -> ApiCode | str:
+    """规范化业务码。"""
     if isinstance(code, ApiCode):
         return code
     try:
@@ -47,6 +47,7 @@ def resolve_code(code: ApiCode | str) -> ApiCode | str:
 
 
 def default_message(code: ApiCode | str) -> str:
+    """取业务码默认用户文案。"""
     resolved = resolve_code(code)
     if isinstance(resolved, ApiCode):
         return API_CODE_MESSAGES[resolved]
@@ -54,6 +55,7 @@ def default_message(code: ApiCode | str) -> str:
 
 
 def default_status(code: ApiCode | str, fallback: int = 400) -> int:
+    """取业务码默认 HTTP 状态码。"""
     resolved = resolve_code(code)
     if isinstance(resolved, ApiCode):
         return API_CODE_HTTP_STATUS[resolved]
@@ -66,7 +68,7 @@ def error_detail(
     *,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the inner ``detail`` payload for ``HTTPException`` / SSE errors."""
+    """构造 HTTPException / SSE 用的内部 detail 载荷。"""
     payload: dict[str, Any] = {
         "code": str(code),
         "message": message if message is not None else default_message(code),
@@ -82,7 +84,7 @@ def error_body(
     *,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the full JSON body ``{"error": {...}}``."""
+    """构造完整 JSON 体 ``{"error": {...}}``。"""
     return {"error": error_detail(code, message, details=details)}
 
 
@@ -93,7 +95,7 @@ def api_error(
     status_code: int | None = None,
     details: dict[str, Any] | None = None,
 ) -> HTTPException:
-    """Create an ``HTTPException`` with the unified error detail shape."""
+    """创建带统一 error detail 形态的 HTTPException。"""
     return HTTPException(
         status_code=status_code if status_code is not None else default_status(code),
         detail=error_detail(code, message, details=details),
@@ -101,10 +103,9 @@ def api_error(
 
 
 class ApiException(Exception):
-    """Domain exception carrying a unified API code.
+    """携带统一业务码的领域异常。
 
-    Services can raise this (or subclasses) and routes convert with
-    ``raise api_error_from_exc(exc)``.
+    Service 可抛出本类（或子类），路由用 ``raise api_error_from_exc(exc)`` 转换。
     """
 
     def __init__(
@@ -125,6 +126,7 @@ class ApiException(Exception):
 
 
 def api_error_from_exc(exc: ApiException) -> HTTPException:
+    """将 ApiException 转为 HTTPException。"""
     return api_error(
         exc.code,
         exc.message,
@@ -134,7 +136,7 @@ def api_error_from_exc(exc: ApiException) -> HTTPException:
 
 
 def ok(data: Any = None, *, message: str | None = None) -> dict[str, Any]:
-    """Optional success envelope helper (use when an endpoint needs it)."""
+    """可选成功信封（仅在端点需要显式包装时使用）。"""
     return {
         "code": ApiCode.OK,
         "message": message if message is not None else API_CODE_MESSAGES[ApiCode.OK],

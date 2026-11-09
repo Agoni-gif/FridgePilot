@@ -1,3 +1,8 @@
+"""会话历史摘要：溢出轮次压缩、版本条件写入。
+
+摘要失败为软失败，不阻断主聊天请求。
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.common.config import Settings
 from app.db.models import MessageRecord, SessionRecord
 from app.providers.llm import LLMError, LLMProvider
+from app.repositories import conversation_repository, session_repository
 from app.schemas.context import ConversationSummary, RecentTurn
 from app.services.conversation_context import (
     estimate_tokens,
@@ -24,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CompleteTurn:
+    """一对完整的用户/助手消息轮次。"""
+
     user_message_id: int
     user_content: str
     assistant_message_id: int
@@ -34,6 +42,8 @@ class CompleteTurn:
 
 @dataclass
 class SummaryAttemptResult:
+    """一次摘要尝试的结果统计（供日志与测试断言）。"""
+
     committed: bool
     skipped_reason: str | None = None
     elapsed_ms: int = 0
@@ -44,6 +54,7 @@ class SummaryAttemptResult:
 
 
 def parse_summary_json(raw: str | None) -> ConversationSummary | None:
+    """解析会话摘要 JSON；损坏则忽略。"""
     if not raw:
         return None
     try:
@@ -62,14 +73,20 @@ def load_complete_turns(
     *,
     after_message_id: int | None = None,
 ) -> list[CompleteTurn]:
-    """Pair user/assistant messages after the context boundary into complete turns."""
-    query = db.query(MessageRecord).filter(MessageRecord.session_id == session.id)
+    """将上下文边界之后的用户/助手消息配对成完整轮次。"""
+    lower_bound: int | None = None
     boundary = session.context_start_message_id
     if boundary is not None:
-        query = query.filter(MessageRecord.id > boundary)
+        lower_bound = boundary
     if after_message_id is not None:
-        query = query.filter(MessageRecord.id > after_message_id)
-    messages = query.order_by(MessageRecord.id.asc()).all()
+        lower_bound = (
+            after_message_id
+            if lower_bound is None
+            else max(lower_bound, after_message_id)
+        )
+    messages = conversation_repository.list_messages_after(
+        db, session.id, after_message_id=lower_bound
+    )
 
     from app.services.conversation_context import _recipe_titles_by_message
 
@@ -104,7 +121,7 @@ def load_complete_turns(
 
 
 def turns_to_recent(turns: list[CompleteTurn]) -> list[RecentTurn]:
-    """Public alias for pairing complete turns into RecentTurn messages."""
+    """将完整轮次转为 RecentTurn 列表的公开别名。"""
     return _to_recent_turns(turns)
 
 
@@ -115,16 +132,13 @@ def select_recent_and_overflow(
     token_budget: int,
     probe_tokens=None,
 ) -> tuple[list[RecentTurn], list[CompleteTurn]]:
-    """Keep newest complete turns in the recent window; older ones become overflow.
+    """保留最新完整轮次进入近期窗口；更早的进入溢出区。
 
-    When even the newest complete turn cannot fit the final payload, the recent
-    window is empty and that turn is included in overflow (same rule as assemble's
-    fit_recent_turns_to_payload). Do not force-keep an oversized newest turn here
-    only for assemble to drop it later.
+    若最新一轮也塞不进最终 payload，近期窗口为空，该轮计入溢出
+    （与 assemble 的 fit_recent_turns_to_payload 一致），不要在这里强留超大最新轮。
 
-    When probe_tokens is provided, it must estimate the *final serialized payload*
-    size for a candidate recent window (including JSON overhead). Otherwise falls
-    back to content-only turn tokens (legacy/tests).
+    若提供 probe_tokens，须按候选近期窗口估算*最终序列化 payload*大小（含 JSON 开销）；
+    否则退回仅内容 token 估算（兼容旧测试）。
     """
     if not turns:
         return [], []
@@ -136,13 +150,13 @@ def select_recent_and_overflow(
         if probe_tokens is not None:
             fits = probe_tokens(recent) <= token_budget
         else:
-            # Empty recent always fits the content-only estimator.
+            # 空近期窗口对「仅内容」估算器始终视为可装下
             fits = (not recent) or turns_token_count(recent) <= token_budget
         if fits:
             return recent, turns[:start]
         start += 1
 
-    # Hard fields alone already over budget: still treat all history as overflow.
+    # 硬字段本身已超预算：全部历史仍记为溢出
     return [], list(turns)
 
 
@@ -152,6 +166,7 @@ def estimate_summary_input_tokens(
     *,
     max_chars: int,
 ) -> int:
+    """估算摘要输入 payload 的 token 数。"""
     payload = _summary_user_payload(previous_summary, turns, max_chars=max_chars)
     return estimate_tokens(json.dumps(payload, ensure_ascii=False))
 
@@ -163,10 +178,9 @@ def select_summary_batch(
     input_token_budget: int,
     max_chars: int,
 ) -> list[CompleteTurn]:
-    """Take the oldest contiguous complete turns that fit the summary input budget.
+    """取能装进摘要输入预算的最旧连续完整轮次。
 
-    If even the first turn alone exceeds the budget, return an empty batch so the
-    caller can skip without advancing the coverage pointer.
+    若第一轮单独就超预算，返回空批次，调用方跳过且不推进覆盖指针。
     """
     if not overflow:
         return []
@@ -184,6 +198,7 @@ def select_summary_batch(
 
 
 def _to_recent_turns(turns: list[CompleteTurn]) -> list[RecentTurn]:
+    """完整轮次展开为交替的 user/assistant RecentTurn。"""
     out: list[RecentTurn] = []
     for turn in turns:
         out.append(
@@ -206,6 +221,7 @@ def _to_recent_turns(turns: list[CompleteTurn]) -> list[RecentTurn]:
 
 
 def clear_summary_fields(session: SessionRecord) -> None:
+    """清空摘要相关字段（清除上下文时调用）。"""
     session.summary_json = None
     session.summary_until_message_id = None
     session.summary_version = 0
@@ -218,21 +234,13 @@ def commit_summary_if_version_matches(
     started_version: int,
     summary: ConversationSummary,
 ) -> bool:
-    """Persist summary only when context_version still matches (blocks post-clear revive)."""
-    updated = (
-        db.query(SessionRecord)
-        .filter(
-            SessionRecord.id == session_id,
-            SessionRecord.context_version == started_version,
-        )
-        .update(
-            {
-                SessionRecord.summary_json: summary.model_dump_json(),
-                SessionRecord.summary_until_message_id: summary.covered_until_message_id,
-                SessionRecord.summary_version: SessionRecord.summary_version + 1,
-            },
-            synchronize_session=False,
-        )
+    """仅当 context_version 仍匹配时写入摘要，防止清除上下文后旧任务复活。"""
+    updated = session_repository.update_summary_if_version(
+        db,
+        session_id=session_id,
+        expected_version=started_version,
+        summary_json=summary.model_dump_json(),
+        summary_until_message_id=summary.covered_until_message_id,
     )
     if updated != 1:
         db.rollback()
@@ -254,14 +262,13 @@ async def maybe_refresh_conversation_summary(
     allergies: list[str] | None = None,
     session_state=None,
 ) -> SummaryAttemptResult:
-    """If older complete turns fall outside the recent window, summarize a bounded batch.
+    """当更早完整轮次落在近期窗口外时，对有界批次做摘要。
 
-    Recent/overflow is decided by the final serialized payload size (same probe as
-    assemble_context), so later enforce_payload_budget trimming does not open a gap.
-    Only a budget-limited oldest batch is sent; the pointer advances only through
-    turns actually accepted under the input budget.
+    近期/溢出按最终序列化 payload 判定（与 assemble_context 同一探针），
+    避免后续 enforce_payload_budget 裁剪后出现空洞。
+    只发送预算内最旧批次；覆盖指针仅推进实际被接受的轮次。
 
-    Failures are soft: caller continues with state + recent turns.
+    失败为软失败：调用方继续使用状态 + 近期轮次。
     """
     if not settings.session_memory_enabled or not settings.context_summary_enabled:
         return SummaryAttemptResult(committed=False, skipped_reason="disabled")
@@ -292,7 +299,7 @@ async def maybe_refresh_conversation_summary(
             allergies=allergy_list,
         )
 
-    # Prefer final-payload fitting; optional turns_token_budget only for legacy tests.
+    # 优先按最终 payload 拟合；turns_token_budget 仅兼容旧测试
     if turns_token_budget is not None:
         _recent, overflow = select_recent_and_overflow(
             uncovered,
@@ -337,7 +344,7 @@ async def maybe_refresh_conversation_summary(
     input_tokens = estimate_summary_input_tokens(
         previous_text, batch, max_chars=settings.context_summary_max_chars
     )
-    # Hard gate before send: never mark coverage for an over-budget payload.
+    # 发送前硬门槛：超预算绝不推进覆盖指针
     if input_tokens > input_budget:
         logger.info(
             "conversation summary hard-reject session=%s tokens=%s budget=%s",
@@ -392,7 +399,7 @@ async def maybe_refresh_conversation_summary(
     covered_from = batch[0].user_message_id
     if existing and existing.covered_from_message_id is not None:
         covered_from = existing.covered_from_message_id
-    # Only advance through turns actually sent to the model.
+    # 覆盖指针只推进实际送进模型的轮次
     covered_until = batch[-1].assistant_message_id
     summary = ConversationSummary(
         text=text[: settings.context_summary_max_chars],
@@ -449,6 +456,7 @@ def _summary_user_payload(
     *,
     max_chars: int,
 ) -> dict[str, object]:
+    """构造历史摘要 LLM 的用户侧 JSON 载荷。"""
     turns_payload = []
     for t in overflow:
         if t.response_status == "error":
@@ -475,6 +483,7 @@ async def _summarize_overflow(
     overflow: list[CompleteTurn],
     max_chars: int,
 ) -> str:
+    """调用 LLM 压缩溢出轮次，返回摘要文本（截断到 max_chars）。"""
     from app.agent.prompts import CONTEXT_HISTORY_SUMMARY_SYSTEM
 
     user_payload = _summary_user_payload(

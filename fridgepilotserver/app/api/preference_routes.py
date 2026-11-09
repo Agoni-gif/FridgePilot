@@ -1,3 +1,5 @@
+"""当前用户做饭偏好 HTTP 路由。"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -20,6 +22,7 @@ async def get_my_preferences(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
+    """获取当前用户偏好。"""
     return _service.get(db, user_id=user.id)
 
 
@@ -29,6 +32,7 @@ async def patch_my_preferences(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
+    """带版本号的偏好补丁更新。"""
     try:
         return _service.patch(db, user_id=user.id, body=body)
     except PreferenceConflictError as exc:
@@ -42,4 +46,5 @@ async def delete_my_preferences(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
+    """删除当前用户偏好。"""
     return _service.delete(db, user_id=user.id)

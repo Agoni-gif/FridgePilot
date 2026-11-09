@@ -1,14 +1,20 @@
+"""菜谱、来源与用户约束 schema。"""
+
 from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class Ingredient(BaseModel):
+    """食材名称与可选用量。"""
+
     name: str = Field(..., min_length=1, max_length=50)
     quantity: str | None = Field(default=None, max_length=50)
 
 
 class UserConstraints(BaseModel):
+    """传给总结模型的用户约束与检索 query。"""
+
     ingredients: list[Ingredient] = Field(default_factory=list, max_length=30)
     meal: str | None = Field(default=None, max_length=30)
     max_time_minutes: int | None = Field(default=None, ge=1, le=300)
@@ -28,6 +34,8 @@ MAX_SOURCE_URL_LENGTH = 2048
 
 
 class RecipeSource(BaseModel):
+    """菜谱可核验来源链接。"""
+
     title: str = Field(..., min_length=1, max_length=200)
     url: str = Field(..., min_length=1, max_length=MAX_SOURCE_URL_LENGTH)
 
@@ -40,6 +48,8 @@ class RecipeSource(BaseModel):
 
 
 class Recipe(BaseModel):
+    """结构化菜谱（含来源与置信度）。"""
+
     title: str = Field(..., min_length=1, max_length=120)
     summary: str = Field(..., min_length=1, max_length=500)
     prep_time_minutes: int | None = Field(default=None, ge=0, le=300)
@@ -56,12 +66,14 @@ class Recipe(BaseModel):
     def non_empty_strings(cls, values: list[str]) -> list[str]:
         cleaned = [v.strip() for v in values if v and v.strip()]
         if not cleaned and values is not None:
-            # tips may be empty; ingredients/steps enforced by min_length
+            # tips 允许空；ingredients/steps 由 min_length 约束
             return cleaned
         return cleaned
 
 
 class SearchResult(BaseModel):
+    """网页检索原始结果条目。"""
+
     title: str
     url: str
     content: str = ""

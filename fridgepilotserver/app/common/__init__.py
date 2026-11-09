@@ -1,4 +1,4 @@
-"""Shared infrastructure: config, logging, API codes/responses."""
+"""公共基础设施：配置、日志、API 错误码与响应封装。"""
 
 from app.common.api_codes import ApiCode
 from app.common.config import Settings, get_settings
