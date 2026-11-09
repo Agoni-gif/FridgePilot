@@ -444,7 +444,6 @@ defineExpose({ reload: load })
 .slider-captcha {
   position: relative;
   width: 100%;
-  max-width: 320px;
 }
 
 .trigger {
@@ -453,9 +452,10 @@ defineExpose({ reload: load })
   align-items: center;
   gap: 0.55rem;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 0.72rem 0.9rem;
-  background: var(--bg-soft);
+  border-radius: 14px;
+  padding: 0.88rem 1rem;
+  background: #fff;
+
   color: var(--ink-soft);
   font: inherit;
   font-size: 0.9rem;

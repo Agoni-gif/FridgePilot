@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChatMessageItem } from '../types/recipe'
 import RecipeCard from './RecipeCard.vue'
+import ThinkingPanel from './ThinkingPanel.vue'
 
 defineProps<{
   item: ChatMessageItem
@@ -17,24 +18,30 @@ defineProps<{
 
     <template v-else-if="item.role === 'status'">
       <div class="assistant-block">
-        <div class="avatar" aria-hidden="true">F</div>
-        <div class="status">
+        <ThinkingPanel v-if="item.thinking" :thinking="item.thinking" />
+        <div v-else class="status">
           <span class="dots" aria-hidden="true"><i /><i /><i /></span>
           <span>{{ item.text }}</span>
         </div>
       </div>
     </template>
 
+    <template v-else-if="item.role === 'divider'">
+      <div class="divider" role="separator">
+        <span>{{ item.text || '已重新开始，之前的聊天不再作为本次参考' }}</span>
+      </div>
+    </template>
+
     <template v-else-if="item.role === 'error'">
       <div class="assistant-block">
-        <div class="avatar" aria-hidden="true">F</div>
+        <ThinkingPanel v-if="item.thinking" :thinking="item.thinking" />
         <div class="error">{{ item.text }}</div>
       </div>
     </template>
 
     <template v-else-if="item.recipe">
       <div class="assistant-block">
-        <div class="avatar" aria-hidden="true">F</div>
+        <ThinkingPanel v-if="item.thinking" :thinking="item.thinking" />
         <div class="body">
           <RecipeCard :recipe="item.recipe" />
         </div>
@@ -43,7 +50,7 @@ defineProps<{
 
     <template v-else>
       <div class="assistant-block">
-        <div class="avatar" aria-hidden="true">F</div>
+        <ThinkingPanel v-if="item.thinking" :thinking="item.thinking" />
         <div class="body plain">
           <p>{{ item.text }}</p>
         </div>
@@ -54,14 +61,26 @@ defineProps<{
 
 <style scoped>
 .row {
-  width: min(100%, var(--content-width));
-  margin: 0 auto 1.35rem;
+  width: 100%;
+  margin: 0 0 1.35rem;
   animation: rise 320ms var(--ease) both;
 }
 
 .row.user {
   display: flex;
   justify-content: flex-end;
+}
+
+.row.status,
+.row.assistant,
+.row.error,
+.row.divider {
+  display: block;
+}
+
+.assistant-block {
+  width: 100%;
+  min-width: 0;
 }
 
 .user-bubble {
@@ -80,29 +99,8 @@ defineProps<{
   word-break: break-word;
 }
 
-.assistant-block {
-  display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
-  gap: 0.75rem;
-  align-items: start;
-}
-
-.avatar {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: var(--brand);
-  color: #fff;
-  font-size: 0.8rem;
-  font-weight: 700;
-  margin-top: 0.1rem;
-}
-
 .body {
   min-width: 0;
-  padding-top: 0.2rem;
   line-height: 1.7;
   color: var(--ink);
   font-size: 0.98rem;
@@ -144,6 +142,27 @@ defineProps<{
   background: var(--danger-wash);
   color: var(--danger);
   line-height: 1.55;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.35rem 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.divider span {
+  white-space: nowrap;
 }
 
 @keyframes rise {

@@ -8,6 +8,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 # Force sqlite before app modules create the engine from Settings.
+# APP_ENV=test so development MySQL-only policy does not block unit tests.
+os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["JWT_SECRET"] = "test-jwt-secret"
 os.environ["LLM_API_KEY"] = "test"

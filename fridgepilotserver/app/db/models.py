@@ -42,6 +42,40 @@ class User(Base):
     )
 
     sessions: Mapped[list[SessionRecord]] = relationship(back_populates="user")
+    preference: Mapped[UserPreferenceRecord | None] = relationship(
+        back_populates="user", uselist=False
+    )
+
+
+class UserPreferenceRecord(Base):
+    """用户长期做饭偏好：一位用户至多一条。"""
+
+    __tablename__ = "user_preferences"
+    __table_args__ = ({"comment": "用户长期做饭偏好表"},)
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.id"),
+        primary_key=True,
+        comment="用户主键，同时作为唯一外键",
+    )
+    enabled: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", comment="是否用于生成：0 否 1 是"
+    )
+    preferences_json: Mapped[str] = mapped_column(
+        Text, comment="白名单偏好与过敏声明 JSON"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", comment="乐观锁版本"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="最近更新时间",
+    )
+
+    user: Mapped[User] = relationship(back_populates="preference")
 
 
 class SessionRecord(Base):
@@ -67,6 +101,33 @@ class SessionRecord(Base):
         onupdate=func.now(),
         comment="最近活跃时间",
     )
+    context_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", comment="上下文版本（清除/提交时递增）"
+    )
+    context_start_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="清除上下文后仅使用大于此 ID 的消息"
+    )
+    state_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="当前验证后的任务状态 JSON"
+    )
+    session_overrides_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="显式设置与清除标记 JSON"
+    )
+    active_request_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="当前占用生成请求 ID"
+    )
+    active_request_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="生成占用过期时间"
+    )
+    summary_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="长对话背景摘要 JSON（不覆盖任务状态）"
+    )
+    summary_until_message_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="摘要已覆盖的最大消息 ID（与近期窗口不重叠）"
+    )
+    summary_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", comment="摘要版本（提交校验用）"
+    )
 
     user: Mapped[User | None] = relationship(back_populates="sessions")
     messages: Mapped[list[MessageRecord]] = relationship(back_populates="session")
@@ -87,6 +148,20 @@ class MessageRecord(Base):
     )
     role: Mapped[str] = mapped_column(String(20), comment="角色：user / assistant / system")
     content: Mapped[str] = mapped_column(Text, comment="消息正文")
+    thinking: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="模型真实思考过程原文"
+    )
+    reply_to_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("messages.id"),
+        nullable=True,
+        comment="助手回复对应的用户消息 ID",
+    )
+    response_status: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="completed / clarification / insufficient_sources / error",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), comment="创建时间"
     )
@@ -109,6 +184,13 @@ class RecipeRecord(Base):
     recipe_json: Mapped[str] = mapped_column(Text, comment="结构化菜谱 JSON")
     sources_json: Mapped[str] = mapped_column(Text, comment="检索来源 JSON")
     prompt_version: Mapped[str] = mapped_column(String(32), comment="提示词 / 编排版本号")
+    assistant_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("messages.id"),
+        nullable=True,
+        unique=True,
+        comment="关联的助手消息 ID",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), comment="创建时间"
     )

@@ -13,6 +13,9 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
+from app.common.api_codes import ApiCode
+from app.common.response import ApiException
+
 logger = logging.getLogger(__name__)
 
 BG_WIDTH = 320
@@ -58,12 +61,8 @@ class _RateBucket:
     locked_until: float = 0.0
 
 
-class CaptchaError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400) -> None:
-        self.code = code
-        self.message = message
-        self.status_code = status_code
-        super().__init__(message)
+class CaptchaError(ApiException):
+    """Captcha-domain API error."""
 
 
 class CaptchaService:
@@ -155,7 +154,9 @@ class CaptchaService:
                     client_key,
                 )
                 self._register_failure_unlocked(client_key, now)
-                raise CaptchaError("CAPTCHA_FAILED", "位置不太对，已换一题，请再试一次", status_code=400)
+                raise CaptchaError(
+                    ApiCode.CAPTCHA_FAILED, "位置不太对，已换一题，请再试一次"
+                )
             challenge.verified = True
             challenge.verified_x = x
 
@@ -179,12 +180,12 @@ class CaptchaService:
                     client_key,
                 )
                 self._register_failure_unlocked(client_key, now)
-                raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+                raise CaptchaError(ApiCode.CAPTCHA_FAILED)
             if challenge.verified and challenge.verified_x is not None:
                 if abs(x - challenge.verified_x) > TOLERANCE_PX:
                     self._challenges.pop(captcha_id, None)
                     self._register_failure_unlocked(client_key, now)
-                    raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+                    raise CaptchaError(ApiCode.CAPTCHA_FAILED)
             challenge.consumed = True
             self._challenges.pop(captcha_id, None)
 
@@ -194,11 +195,11 @@ class CaptchaService:
         except (TypeError, ValueError):
             logger.info("captcha rejected reason=bad_x key=%s", client_key)
             self._register_failure(client_key)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400) from None
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED) from None
         if not math.isfinite(x):
             logger.info("captcha rejected reason=non_finite_x key=%s", client_key)
             self._register_failure(client_key)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED)
         return x
 
     def _require_challenge_unlocked(
@@ -211,21 +212,21 @@ class CaptchaService:
         self._assert_not_locked_unlocked(client_key, now)
         if not isinstance(captcha_id, str) or not (8 <= len(captcha_id) <= 64):
             logger.info("captcha rejected reason=bad_id key=%s", client_key)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED)
         challenge = self._challenges.get(captcha_id)
         if challenge is None:
             logger.info("captcha rejected reason=invalid id=%s… key=%s", captcha_id[:8], client_key)
             self._register_failure_unlocked(client_key, now)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED)
         if challenge.consumed:
             logger.info("captcha rejected reason=used id=%s… key=%s", captcha_id[:8], client_key)
             self._register_failure_unlocked(client_key, now)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED)
         if challenge.expires_at < now:
             self._challenges.pop(captcha_id, None)
             logger.info("captcha rejected reason=expired id=%s… key=%s", captcha_id[:8], client_key)
             self._register_failure_unlocked(client_key, now)
-            raise CaptchaError("CAPTCHA_FAILED", "验证失败，请刷新后重试", status_code=400)
+            raise CaptchaError(ApiCode.CAPTCHA_FAILED)
         return challenge
 
     def _register_failure(self, client_key: str) -> None:
@@ -254,20 +255,15 @@ class CaptchaService:
             remain = max(1, int(bucket.locked_until - now))
             mins = max(1, (remain + 59) // 60)
             raise CaptchaError(
-                "CAPTCHA_LOCKED",
+                ApiCode.CAPTCHA_LOCKED,
                 f"尝试次数较多，请约 {mins} 分钟后再试",
-                status_code=429,
             )
 
     def _assert_create_allowed_unlocked(self, client_key: str, now: float) -> None:
         bucket = self._rate.setdefault(client_key, _RateBucket())
         bucket.create_times = [t for t in bucket.create_times if now - t <= _CREATE_WINDOW_S]
         if len(bucket.create_times) >= _CREATE_LIMIT:
-            raise CaptchaError(
-                "CAPTCHA_RATE_LIMITED",
-                "请求有点快，请稍等几秒再试",
-                status_code=429,
-            )
+            raise CaptchaError(ApiCode.CAPTCHA_RATE_LIMITED)
         bucket.create_times.append(now)
 
     def _purge_expired_unlocked(self, now: float) -> None:
@@ -321,9 +317,8 @@ class CaptchaService:
     def _load_background(self) -> Image.Image:
         if not self._bg_paths:
             raise CaptchaError(
-                "CAPTCHA_ASSET_MISSING",
+                ApiCode.CAPTCHA_ASSET_MISSING,
                 f"验证码背景图未配置，请将图片放到 {BG_DIR.as_posix()}",
-                status_code=500,
             )
         path = random.choice(self._bg_paths)
         resized = self._cover_scaled(path)

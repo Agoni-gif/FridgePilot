@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import type { ChatPreferences } from '../types/recipe'
 
 const props = defineProps<{
   disabled: boolean
@@ -8,7 +7,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [payload: { message: string; preferences: ChatPreferences }]
+  submit: [payload: { message: string }]
   'update:draft': [value: string]
 }>()
 
@@ -34,16 +33,14 @@ function autoResize() {
   el.style.height = `${Math.min(el.scrollHeight, 160)}px`
 }
 
-function onSubmit() {
+async function onSubmit() {
   if (!canSubmit.value) return
-  emit('submit', {
-    message: message.value.trim(),
-    preferences: {
-      max_time_minutes: null,
-      servings: null,
-      dietary_restrictions: [],
-    },
-  })
+  const text = message.value.trim()
+  message.value = ''
+  emit('update:draft', '')
+  await nextTick()
+  autoResize()
+  emit('submit', { message: text })
 }
 </script>
 

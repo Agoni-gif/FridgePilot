@@ -5,19 +5,17 @@ import secrets
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.common.api_codes import ApiCode
 from app.common.config import Settings
+from app.common.response import ApiException
 from app.common.security import create_access_token, hash_password, verify_password
 from app.db.models import User
 from app.schemas.auth import AuthTokenResponse, LoginRequest, RegisterRequest, UserPublic
 from app.services.captcha_service import CaptchaError, CaptchaService
 
 
-class AuthError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400) -> None:
-        self.code = code
-        self.message = message
-        self.status_code = status_code
-        super().__init__(message)
+class AuthError(ApiException):
+    """Auth-domain API error."""
 
 
 class AuthService:
@@ -27,9 +25,9 @@ class AuthService:
 
     def register(self, db: Session, body: RegisterRequest) -> AuthTokenResponse:
         if self._find_by_username(db, body.username):
-            raise AuthError("USERNAME_TAKEN", "用户名已被占用", status_code=409)
+            raise AuthError(ApiCode.USERNAME_TAKEN)
         if body.email and self._find_by_email(db, str(body.email)):
-            raise AuthError("EMAIL_TAKEN", "邮箱已被注册", status_code=409)
+            raise AuthError(ApiCode.EMAIL_TAKEN)
 
         user = User(
             id=secrets.token_urlsafe(16),
@@ -56,11 +54,13 @@ class AuthService:
                 client_key=client_key,
             )
         except CaptchaError as exc:
-            raise AuthError(exc.code, exc.message, status_code=exc.status_code) from exc
+            raise AuthError(
+                exc.code, exc.message, status_code=exc.status_code
+            ) from exc
 
         user = self._find_by_account(db, body.account)
         if not user or not verify_password(body.password, user.password_hash):
-            raise AuthError("INVALID_CREDENTIALS", "账号或密码错误", status_code=401)
+            raise AuthError(ApiCode.INVALID_CREDENTIALS)
         return self._token_response(user)
 
     def to_public(self, user: User) -> UserPublic:

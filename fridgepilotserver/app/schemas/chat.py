@@ -2,6 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from .context import PreferencePatch, PublicContext
 from .recipe import Recipe
 
 
@@ -15,6 +16,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
     session_id: str | None = Field(default=None, max_length=64)
     preferences: ChatPreferences | None = None
+    preference_patch: PreferencePatch | None = None
 
     @field_validator("message")
     @classmethod
@@ -34,10 +36,12 @@ class ChatMeta(BaseModel):
 
 class ChatResponse(BaseModel):
     session_id: str
-    status: Literal["completed", "insufficient_sources", "error"]
+    status: Literal["completed", "insufficient_sources", "error", "clarification"]
     recipe: Recipe | None = None
     message: str | None = None
+    thinking: str | None = None
     meta: ChatMeta
+    context: PublicContext | None = None
 
 
 class ErrorBody(BaseModel):

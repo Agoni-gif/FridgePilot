@@ -14,6 +14,7 @@ from app.api.errors import (
     validation_exception_handler,
 )
 from app.api.auth_routes import router as auth_router
+from app.api.preference_routes import router as preference_router
 from app.api.routes import router
 from app.common.config import get_settings
 from app.common.logging_setup import setup_logging
@@ -23,11 +24,28 @@ from app.middleware import RequestLoggingMiddleware
 logger = logging.getLogger(__name__)
 
 
+def _assert_database_policy(settings) -> None:
+    """Local development must use MySQL; SQLite is reserved for production/Docker."""
+    url = (settings.database_url or "").strip()
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is empty. For local development set a MySQL URL in the "
+            "repo-root .env (see .env.example)."
+        )
+    is_sqlite = url.startswith("sqlite:")
+    if settings.app_env == "development" and is_sqlite:
+        raise RuntimeError(
+            "Local development must use MySQL (DATABASE_URL=mysql+pymysql://...). "
+            "SQLite is only for production/Docker Compose."
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings = get_settings()
     setup_logging(settings)
     logger.info("Starting FridgePilot server env=%s", settings.app_env)
+    _assert_database_policy(settings)
     init_db()
     logger.info("Database ready dialect=%s", settings.database_url.split(":")[0])
     yield
@@ -50,6 +68,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_exception_handler)
     app.include_router(router)
     app.include_router(auth_router)
+    app.include_router(preference_router)
     return app
 
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import jwt
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.common.api_codes import ApiCode
 from app.common.config import Settings, get_settings
+from app.common.response import api_error
 from app.common.security import decode_access_token
 from app.db.models import User
 from app.db.session import get_db
@@ -29,25 +31,16 @@ def get_current_user(
     settings: Settings = Depends(get_settings),
 ) -> User:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "UNAUTHORIZED", "message": "请先登录。"},
-        )
+        raise api_error(ApiCode.UNAUTHORIZED)
 
     try:
         user_id = decode_access_token(credentials.credentials, settings)
     except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "INVALID_TOKEN", "message": "登录已失效，请重新登录。"},
-        ) from None
+        raise api_error(ApiCode.INVALID_TOKEN) from None
 
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "UNAUTHORIZED", "message": "请先登录。"},
-        )
+        raise api_error(ApiCode.UNAUTHORIZED)
 
     request.state.user_id = user.id
     return user

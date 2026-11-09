@@ -41,10 +41,10 @@ python -m venv .venv
 # Windows
 .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8903
 ```
 
-健康检查：`GET http://127.0.0.1:8000/api/v1/health`
+健康检查：`GET http://127.0.0.1:8903/api/v1/health`
 
 日志默认输出到终端，同时写入 `fridgepilotserver/logs/fridgepilotserver.log`（可用 `.env` 的 `LOG_LEVEL` / `LOG_FILE` 调整）。用户输入仅记录脱敏预览，不会打印 API Key。
 
@@ -63,7 +63,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173`。Vite 已将 `/api` 代理到后端。
+打开 `http://127.0.0.1:7093`。Vite 已将 `/api` 代理到后端。
 
 ### 4. 运行测试
 
@@ -159,6 +159,10 @@ cd /www/wwwroot/FridgePal && bash scripts/deploy.sh >> /tmp/fridgepilot-deploy.l
 |---|---|---|
 | GET | `/api/v1/health` | 存活检查（无需登录） |
 | POST | `/api/v1/chat` | 解析食材 → 搜索 → 结构化菜谱（需 Bearer Token） |
+| POST | `/api/v1/chat/stream` | 同上，SSE 流式推送真实思考过程与最终结果 |
+| GET | `/api/v1/sessions` | 当前用户的对话历史列表 |
+| GET | `/api/v1/sessions/{id}/messages` | 加载某次对话的消息与菜谱 |
+| DELETE | `/api/v1/sessions/{id}` | 删除对话 |
 
 请求示例：
 

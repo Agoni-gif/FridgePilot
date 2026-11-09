@@ -1,4 +1,5 @@
 from .chat import ChatPreferences, ChatRequest, ChatResponse, ChatMeta
+from .context import PreferencePatch, PublicContext, SessionState
 from .recipe import (
     Ingredient,
     Recipe,
@@ -12,6 +13,9 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "ChatMeta",
+    "PreferencePatch",
+    "PublicContext",
+    "SessionState",
     "Ingredient",
     "Recipe",
     "RecipeSource",

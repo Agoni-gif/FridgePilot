@@ -15,9 +15,10 @@ class UserConstraints(BaseModel):
     servings: int | None = Field(default=None, ge=1, le=20)
     cuisine: str | None = Field(default=None, max_length=50)
     dietary_restrictions: list[str] = Field(default_factory=list, max_length=10)
+    allergies: list[str] = Field(default_factory=list, max_length=10)
     search_queries: list[str] = Field(default_factory=list, max_length=4)
 
-    @field_validator("dietary_restrictions")
+    @field_validator("dietary_restrictions", "allergies")
     @classmethod
     def trim_restrictions(cls, values: list[str]) -> list[str]:
         return [v.strip() for v in values if v and v.strip()][:10]

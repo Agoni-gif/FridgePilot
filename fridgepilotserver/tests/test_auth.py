@@ -122,7 +122,7 @@ def test_chat_requires_auth(client):
 def test_chat_session_owned_by_user(client, monkeypatch):
     from app.agent.orchestrator import AgentOutcome
 
-    async def fake_run(self, message, preferences, request_id="-"):
+    async def fake_run(self, message, preferences=None, request_id="-", on_progress=None, **kwargs):
         return AgentOutcome(
             status="error",
             recipe=None,

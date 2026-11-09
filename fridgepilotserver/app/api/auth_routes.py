@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.client_ip import client_key
 from app.api.deps import get_auth_service, get_current_user
+from app.common.api_codes import ApiCode
+from app.common.response import api_error, api_error_from_exc
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.auth import (
@@ -23,11 +25,6 @@ from app.services.captcha_service import CaptchaError, CaptchaService, get_captc
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-_NOT_IMPLEMENTED = {
-    "code": "NOT_IMPLEMENTED",
-    "message": "该登录方式即将开放，请使用用户名/邮箱登录。",
-}
-
 
 @router.get("/captcha", response_model=CaptchaChallengeResponse)
 def create_captcha(
@@ -37,10 +34,7 @@ def create_captcha(
     try:
         return CaptchaChallengeResponse(**captcha.create(client_key=client_key(request)))
     except CaptchaError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
+        raise api_error_from_exc(exc) from exc
 
 
 @router.post("/captcha/verify", response_model=CaptchaVerifyResponse)
@@ -52,10 +46,7 @@ def verify_captcha(
     try:
         captcha.check(body.captcha_id, body.captcha_x, client_key=client_key(request))
     except CaptchaError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
+        raise api_error_from_exc(exc) from exc
     return CaptchaVerifyResponse(ok=True)
 
 
@@ -68,10 +59,7 @@ def register(
     try:
         return service.register(db, body)
     except AuthError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
+        raise api_error_from_exc(exc) from exc
 
 
 @router.post("/login", response_model=AuthTokenResponse)
@@ -84,10 +72,7 @@ def login(
     try:
         return service.login(db, body, client_key=client_key(request))
     except AuthError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
+        raise api_error_from_exc(exc) from exc
 
 
 @router.get("/me", response_model=UserPublic)
@@ -109,12 +94,12 @@ def logout(_user: User = Depends(get_current_user)) -> Response:
 
 @router.post("/phone/send-code")
 def phone_send_code(_body: PhoneSendCodeRequest) -> None:
-    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
+    raise api_error(ApiCode.NOT_IMPLEMENTED)
 
 
 @router.post("/phone/login")
 def phone_login(_body: PhoneLoginRequest) -> None:
-    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
+    raise api_error(ApiCode.NOT_IMPLEMENTED)
 
 
 # --- Reserved: OAuth (not implemented) ---
@@ -123,18 +108,12 @@ def phone_login(_body: PhoneLoginRequest) -> None:
 @router.get("/oauth/{provider}/start")
 def oauth_start(provider: str) -> None:
     if provider not in {"wechat", "github", "google"}:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "UNKNOWN_PROVIDER", "message": "不支持的登录方式。"},
-        )
-    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
+        raise api_error(ApiCode.UNKNOWN_PROVIDER)
+    raise api_error(ApiCode.NOT_IMPLEMENTED)
 
 
 @router.get("/oauth/{provider}/callback")
 def oauth_callback(provider: str) -> None:
     if provider not in {"wechat", "github", "google"}:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "UNKNOWN_PROVIDER", "message": "不支持的登录方式。"},
-        )
-    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
+        raise api_error(ApiCode.UNKNOWN_PROVIDER)
+    raise api_error(ApiCode.NOT_IMPLEMENTED)

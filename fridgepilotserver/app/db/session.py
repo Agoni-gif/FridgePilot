@@ -81,23 +81,133 @@ def _ensure_columns() -> None:
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
-    if "sessions" not in inspector.get_table_names():
-        return
-
-    existing = {col["name"] for col in inspector.get_columns("sessions")}
-    if "user_id" in existing:
-        return
-
     dialect = engine.dialect.name
-    with engine.begin() as conn:
-        if dialect == "sqlite":
-            conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64)"))
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON sessions (user_id)")
-            )
-        else:
-            conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64) NULL"))
-            conn.execute(text("CREATE INDEX ix_sessions_user_id ON sessions (user_id)"))
+    tables = set(inspector.get_table_names())
+
+    def _add_column(table: str, column: str, ddl_sqlite: str, ddl_other: str) -> None:
+        cols = {col["name"] for col in inspector.get_columns(table)}
+        if column in cols:
+            return
+        with engine.begin() as conn:
+            conn.execute(text(ddl_sqlite if dialect == "sqlite" else ddl_other))
+
+    if "sessions" in tables:
+        session_cols = {col["name"] for col in inspector.get_columns("sessions")}
+        if "user_id" not in session_cols:
+            with engine.begin() as conn:
+                if dialect == "sqlite":
+                    conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64)"))
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON sessions (user_id)"
+                        )
+                    )
+                else:
+                    conn.execute(
+                        text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR(64) NULL")
+                    )
+                    conn.execute(text("CREATE INDEX ix_sessions_user_id ON sessions (user_id)"))
+
+        _add_column(
+            "sessions",
+            "context_version",
+            "ALTER TABLE sessions ADD COLUMN context_version INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN context_version INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column(
+            "sessions",
+            "context_start_message_id",
+            "ALTER TABLE sessions ADD COLUMN context_start_message_id INTEGER",
+            "ALTER TABLE sessions ADD COLUMN context_start_message_id INTEGER NULL",
+        )
+        _add_column(
+            "sessions",
+            "state_json",
+            "ALTER TABLE sessions ADD COLUMN state_json TEXT",
+            "ALTER TABLE sessions ADD COLUMN state_json TEXT NULL",
+        )
+        _add_column(
+            "sessions",
+            "session_overrides_json",
+            "ALTER TABLE sessions ADD COLUMN session_overrides_json TEXT",
+            "ALTER TABLE sessions ADD COLUMN session_overrides_json TEXT NULL",
+        )
+        _add_column(
+            "sessions",
+            "active_request_id",
+            "ALTER TABLE sessions ADD COLUMN active_request_id VARCHAR(64)",
+            "ALTER TABLE sessions ADD COLUMN active_request_id VARCHAR(64) NULL",
+        )
+        _add_column(
+            "sessions",
+            "active_request_expires_at",
+            "ALTER TABLE sessions ADD COLUMN active_request_expires_at DATETIME",
+            "ALTER TABLE sessions ADD COLUMN active_request_expires_at DATETIME NULL",
+        )
+        _add_column(
+            "sessions",
+            "summary_json",
+            "ALTER TABLE sessions ADD COLUMN summary_json TEXT",
+            "ALTER TABLE sessions ADD COLUMN summary_json TEXT NULL",
+        )
+        _add_column(
+            "sessions",
+            "summary_until_message_id",
+            "ALTER TABLE sessions ADD COLUMN summary_until_message_id INTEGER",
+            "ALTER TABLE sessions ADD COLUMN summary_until_message_id INTEGER NULL",
+        )
+        _add_column(
+            "sessions",
+            "summary_version",
+            "ALTER TABLE sessions ADD COLUMN summary_version INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN summary_version INTEGER NOT NULL DEFAULT 0",
+        )
+
+    if "messages" in tables:
+        message_cols = {col["name"] for col in inspector.get_columns("messages")}
+        if "thinking" not in message_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN thinking TEXT"))
+        _add_column(
+            "messages",
+            "reply_to_message_id",
+            "ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER",
+            "ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER NULL",
+        )
+        _add_column(
+            "messages",
+            "response_status",
+            "ALTER TABLE messages ADD COLUMN response_status VARCHAR(32)",
+            "ALTER TABLE messages ADD COLUMN response_status VARCHAR(32) NULL",
+        )
+
+    if "recipes" in tables:
+        _add_column(
+            "recipes",
+            "assistant_message_id",
+            "ALTER TABLE recipes ADD COLUMN assistant_message_id INTEGER",
+            "ALTER TABLE recipes ADD COLUMN assistant_message_id INTEGER NULL",
+        )
+        with engine.begin() as conn:
+            try:
+                if dialect == "sqlite":
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS "
+                            "uq_recipes_assistant_message_id "
+                            "ON recipes (assistant_message_id)"
+                        )
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX uq_recipes_assistant_message_id "
+                            "ON recipes (assistant_message_id)"
+                        )
+                    )
+            except Exception:
+                # Index may already exist on MySQL / re-runs.
+                pass
 
 
 def _ensure_mysql_database(database_url: str) -> None:
