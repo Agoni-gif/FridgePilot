@@ -410,7 +410,11 @@ def fit_recent_turns_to_payload(
     token_budget: int,
     probe_tokens,
 ) -> list[RecentTurn]:
-    """Shrink recent turns from the oldest complete pair until full payload fits."""
+    """Shrink recent turns from the oldest complete pair until full payload fits.
+
+    May return an empty list when even the newest complete turn cannot fit — matching
+    select_recent_and_overflow, which then puts that turn in the summary overflow.
+    """
     if not turns:
         return []
     # turns are [user, asst, user, asst, ...]; max_turns counts pairs.

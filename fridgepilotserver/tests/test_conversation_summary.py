@@ -136,6 +136,40 @@ def test_select_recent_and_overflow_keeps_newest_only():
     assert recent_ids.isdisjoint(overflow_ids)
 
 
+def test_select_recent_and_overflow_allows_empty_when_newest_does_not_fit():
+    from app.services.conversation_summary import CompleteTurn
+
+    turns = [
+        CompleteTurn(
+            user_message_id=1,
+            user_content="old",
+            assistant_message_id=2,
+            assistant_content="old-a",
+            response_status="completed",
+        ),
+        CompleteTurn(
+            user_message_id=19,
+            user_content="newest-user",
+            assistant_message_id=20,
+            assistant_content="newest-asst",
+            response_status="completed",
+        ),
+    ]
+
+    def _never_fits(_recent):
+        return 10_000
+
+    recent, overflow = select_recent_and_overflow(
+        turns,
+        max_turns=2,
+        token_budget=100,
+        probe_tokens=_never_fits,
+    )
+    assert recent == []
+    assert len(overflow) == 2
+    assert overflow[-1].assistant_message_id == 20
+
+
 @pytest.mark.asyncio
 async def test_summary_covers_overflow_without_overlapping_recent():
     _engine, SessionLocal = _engine_db()
@@ -323,6 +357,85 @@ def test_summary_batch_skips_when_first_turn_exceeds_budget():
         max_chars=800,
     )
     assert batch == []
+
+
+@pytest.mark.asyncio
+async def test_newest_turn_enters_overflow_when_it_cannot_fit_recent():
+    """Do not force-keep newest as recent if assemble would drop it anyway."""
+    _engine, SessionLocal = _engine_db()
+    db = SessionLocal()
+    session = _seed_long_session(db, pairs=10)
+    # Inflate the newest pair so it cannot fit a tiny total budget with hard fields.
+    last_user = (
+        db.query(MessageRecord)
+        .filter(MessageRecord.session_id == session.id, MessageRecord.role == "user")
+        .order_by(MessageRecord.id.desc())
+        .first()
+    )
+    last_asst = (
+        db.query(MessageRecord)
+        .filter(
+            MessageRecord.session_id == session.id, MessageRecord.role == "assistant"
+        )
+        .order_by(MessageRecord.id.desc())
+        .first()
+    )
+    assert last_user and last_asst
+    last_user.content = "最新一轮用户。" * 80
+    last_asst.content = "最新一轮助手。" * 120
+    db.commit()
+    newest_user_id = last_user.id
+    newest_asst_id = last_asst.id
+
+    settings = _settings(
+        context_max_turns=2,
+        context_token_budget=350,
+        context_summary_input_token_budget=50_000,
+        context_summary_max_chars=120,
+    )
+    current_message = "继续"
+
+    llm = AsyncMock()
+    llm.chat_json = AsyncMock(
+        return_value=LLMJsonResult(data={"summary": "含最新一轮的背景摘要"})
+    )
+    result = await maybe_refresh_conversation_summary(
+        db,
+        session,
+        llm=llm,
+        settings=settings,
+        started_version=1,
+        current_message=current_message,
+    )
+    assert result.committed is True
+    # Newest pair must have been in overflow (not stranded outside summary+recent).
+    assert result.overflow_turns >= 1
+    db.refresh(session)
+    assert session.summary_until_message_id is not None
+    assert session.summary_until_message_id >= newest_asst_id
+
+    ctx = assemble_context(
+        db, session, current_message=current_message, settings=settings
+    )
+    recent_ids = [
+        mid for mid in (t.message_id for t in ctx.recent_turns) if mid is not None
+    ]
+    # Newest messages are covered by summary; they must not appear as orphans.
+    assert newest_user_id not in recent_ids
+    assert newest_asst_id not in recent_ids
+    orphan = (
+        db.query(MessageRecord)
+        .filter(
+            MessageRecord.session_id == session.id,
+            MessageRecord.id > session.summary_until_message_id,
+        )
+        .count()
+    )
+    # Any message after coverage must be in recent (or there are none).
+    if orphan:
+        assert recent_ids
+        assert min(recent_ids) == session.summary_until_message_id + 1
+    db.close()
 
 
 @pytest.mark.asyncio

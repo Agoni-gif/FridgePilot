@@ -117,6 +117,11 @@ def select_recent_and_overflow(
 ) -> tuple[list[RecentTurn], list[CompleteTurn]]:
     """Keep newest complete turns in the recent window; older ones become overflow.
 
+    When even the newest complete turn cannot fit the final payload, the recent
+    window is empty and that turn is included in overflow (same rule as assemble's
+    fit_recent_turns_to_payload). Do not force-keep an oversized newest turn here
+    only for assemble to drop it later.
+
     When probe_tokens is provided, it must estimate the *final serialized payload*
     size for a candidate recent window (including JSON overhead). Otherwise falls
     back to content-only turn tokens (legacy/tests).
@@ -126,22 +131,19 @@ def select_recent_and_overflow(
 
     start = max(0, len(turns) - max(1, max_turns))
     while start <= len(turns):
-        recent_slice = turns[start:] if start < len(turns) else []
-        if not recent_slice and start > 0:
-            break
+        recent_slice = turns[start:]
         recent = _to_recent_turns(recent_slice)
         if probe_tokens is not None:
             fits = probe_tokens(recent) <= token_budget
         else:
-            fits = turns_token_count(recent) <= token_budget
+            # Empty recent always fits the content-only estimator.
+            fits = (not recent) or turns_token_count(recent) <= token_budget
         if fits:
             return recent, turns[:start]
-        if start >= len(turns) - 1:
-            break
         start += 1
 
-    # Newest single turn still used as recent even if oversized; caller may degrade.
-    return _to_recent_turns(turns[-1:]), turns[:-1]
+    # Hard fields alone already over budget: still treat all history as overflow.
+    return [], list(turns)
 
 
 def estimate_summary_input_tokens(
